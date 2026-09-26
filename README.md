@@ -18,6 +18,18 @@ php artisan boost:add-skill BrivaHamisi/laravel-shipkit --list
 
 Then ask your agent (Claude Code, Cursor, Copilot, Codex, Junie...): *"Add M-Pesa payments"*, *"Make link previews work on WhatsApp"*, *"Stop the spam on our contact form"*.
 
+### Without an agent
+
+Run this inside your Laravel project:
+
+```bash
+npx laravel-shipkit list                       # the 12 skills
+npx laravel-shipkit add secrets-scanner        # one or more skills, or: all
+npx laravel-shipkit add seo-crawlability --dry-run
+```
+
+It copies the code and tests into your app, wires up routes, providers and composer scripts, and prints the next steps. Files you've changed are never overwritten unless you pass `--force`. The package has no dependencies and no install scripts, and needs no network access once downloaded.
+
 ## The skills
 
 ### Payments
@@ -86,9 +98,12 @@ bin/make-test-app                      # a fresh Laravel app in .test-app (once)
 SHIPKIT_APP=.test-app bin/test-skill all
 SHIPKIT_APP=.test-app bin/test-skill mpesa-stk-push
 php bin/check-skills                   # frontmatter, .stub naming, shared files
+npm test                               # the npx installer
 ```
 
 The `payments` model, enum, migration and factory live once in `.shared/payments`. After changing them, run `bin/sync-shared`.
+
+**Releasing:** bump `version` in `package.json`, commit, then publish a GitHub release tagged `v<version>`. The `publish` workflow tests the installer and publishes to npm with provenance through trusted publishing, so no npm token is stored anywhere.
 
 ## Contributing
 

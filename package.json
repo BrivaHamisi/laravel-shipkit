@@ -1,0 +1,30 @@
+{
+    "name": "laravel-shipkit",
+    "version": "1.1.0",
+    "description": "12 production Laravel features (M-Pesa, PayPal, secrets scanning, rate limits, SEO, image uploads and more), installed into your app with one command",
+    "keywords": ["laravel", "mpesa", "paypal", "secrets", "rate-limiting", "seo", "json-ld", "image-upload", "inertia", "wordpress", "ai-skills", "laravel-boost"],
+    "homepage": "https://github.com/BrivaHamisi/laravel-shipkit",
+    "bugs": "https://github.com/BrivaHamisi/laravel-shipkit/issues",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/BrivaHamisi/laravel-shipkit.git"
+    },
+    "license": "MIT",
+    "author": "BrivaHamisi",
+    "type": "module",
+    "bin": {
+        "laravel-shipkit": "cli/index.mjs"
+    },
+    "files": [
+        "cli/",
+        "skills/",
+        "README.md",
+        "LICENSE"
+    ],
+    "engines": {
+        "node": ">=18"
+    },
+    "scripts": {
+        "test": "node --test tests-cli/cli.test.mjs"
+    }
+}
