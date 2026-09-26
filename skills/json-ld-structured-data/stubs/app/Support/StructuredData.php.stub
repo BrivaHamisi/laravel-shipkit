@@ -1,0 +1,159 @@
+<?php
+
+namespace App\Support;
+
+use Illuminate\Support\HtmlString;
+use Illuminate\Support\Str;
+
+/**
+ * Collects the schema.org entities for the page being rendered and prints them as one
+ * JSON-LD @graph in the layout's <head>. Views add page-specific entities (breadcrumbs,
+ * an article, FAQs); the organisation and website are always included.
+ *
+ *   @php(app(\App\Support\StructuredData::class)->addBreadcrumbs([...]))   in a page view
+ *   {{ app(\App\Support\StructuredData::class)->toScript() }}              in the layout <head>
+ */
+class StructuredData
+{
+    /**
+     * @var list<array<string, mixed>>
+     */
+    private array $entities = [];
+
+    /**
+     * @param  array<string, mixed>  $entity
+     */
+    public function add(array $entity): void
+    {
+        $this->entities[] = $entity;
+    }
+
+    /**
+     * @param  list<array{name: string, url?: string|null}>  $crumbs  The last crumb is the current page and needs no URL.
+     */
+    public function addBreadcrumbs(array $crumbs): void
+    {
+        $this->add([
+            '@type' => 'BreadcrumbList',
+            'itemListElement' => collect($crumbs)->values()->map(fn (array $crumb, int $index) => array_filter([
+                '@type' => 'ListItem',
+                'position' => $index + 1,
+                'name' => $crumb['name'],
+                'item' => $crumb['url'] ?? null,
+            ]))->all(),
+        ]);
+    }
+
+    /**
+     * A blog post or news article. Google needs a headline, an image and dates for article rich results.
+     *
+     * @param  array{url: string, headline: string, description?: string|null, image?: string|null, published_at?: \DateTimeInterface|null, updated_at?: \DateTimeInterface|null, author?: string|null, section?: string|null}  $article
+     */
+    public function addArticle(array $article, string $type = 'BlogPosting'): void
+    {
+        $this->add(array_filter([
+            '@type' => $type,
+            '@id' => $article['url'].'#article',
+            'mainEntityOfPage' => $article['url'],
+            'headline' => Str::limit($article['headline'], 110, ''),
+            'description' => isset($article['description']) ? Str::limit(strip_tags($article['description']), 160) : null,
+            'image' => isset($article['image']) ? [$article['image']] : null,
+            'datePublished' => ($article['published_at'] ?? null)?->format(DATE_ATOM),
+            'dateModified' => ($article['updated_at'] ?? $article['published_at'] ?? null)?->format(DATE_ATOM),
+            'author' => filled($article['author'] ?? null) ? ['@type' => 'Person', 'name' => $article['author']] : ['@id' => self::organizationId()],
+            'publisher' => ['@id' => self::organizationId()],
+            'articleSection' => $article['section'] ?? null,
+        ], fn ($value) => $value !== null));
+    }
+
+    /**
+     * Questions and answers shown on the page (they must be visible, not only in the markup).
+     *
+     * @param  iterable<array{question: string, answer: string}>  $faqs
+     */
+    public function addFaqs(iterable $faqs): void
+    {
+        $questions = collect($faqs)->map(fn (array $faq) => [
+            '@type' => 'Question',
+            'name' => $faq['question'],
+            'acceptedAnswer' => ['@type' => 'Answer', 'text' => $faq['answer']],
+        ])->values()->all();
+
+        if ($questions !== []) {
+            $this->add(['@type' => 'FAQPage', 'mainEntity' => $questions]);
+        }
+    }
+
+    /**
+     * The JSON-LD script tag for the layout's <head>.
+     */
+    public function toScript(): HtmlString
+    {
+        $graph = [
+            '@context' => 'https://schema.org',
+            '@graph' => [$this->organization(), $this->website(), ...$this->entities],
+        ];
+
+        // HEX_TAG escapes "<" and ">", so text from the database can never close the script tag.
+        $json = json_encode($graph, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_THROW_ON_ERROR);
+
+        return new HtmlString('<script type="application/ld+json">'.$json.'</script>');
+    }
+
+    public static function organizationId(): string
+    {
+        return url('/').'#organization';
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function organization(): array
+    {
+        $organization = (array) config('structured-data.organization', []);
+        $address = (array) ($organization['address'] ?? []);
+        $logo = $organization['logo'] ?? null;
+
+        return array_filter([
+            '@type' => $organization['type'] ?? 'Organization',
+            '@id' => self::organizationId(),
+            'name' => $organization['name'] ?? config('app.name'),
+            'alternateName' => $organization['alternate_name'] ?? null,
+            'description' => $organization['description'] ?? null,
+            'url' => url('/'),
+            'logo' => $logo ? (Str::startsWith($logo, ['http://', 'https://']) ? $logo : asset($logo)) : null,
+            'foundingDate' => $organization['founding_date'] ?? null,
+            'email' => $organization['email'] ?? null,
+            'telephone' => $organization['telephone'] ?? null,
+            'address' => $address === [] ? null : array_filter([
+                '@type' => 'PostalAddress',
+                'streetAddress' => $address['street'] ?? null,
+                'addressLocality' => $address['locality'] ?? null,
+                'postalCode' => $address['postal_code'] ?? null,
+                'addressCountry' => $address['country'] ?? null,
+            ]),
+            'sameAs' => ($organization['same_as'] ?? []) ?: null,
+        ], fn ($value) => $value !== null);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function website(): array
+    {
+        $searchUrl = config('structured-data.search_url');
+
+        return array_filter([
+            '@type' => 'WebSite',
+            '@id' => url('/').'#website',
+            'name' => config('structured-data.organization.name') ?? config('app.name'),
+            'url' => url('/'),
+            'publisher' => ['@id' => self::organizationId()],
+            'potentialAction' => $searchUrl ? [
+                '@type' => 'SearchAction',
+                'target' => ['@type' => 'EntryPoint', 'urlTemplate' => url($searchUrl)],
+                'query-input' => 'required name=search_term_string',
+            ] : null,
+        ]);
+    }
+}

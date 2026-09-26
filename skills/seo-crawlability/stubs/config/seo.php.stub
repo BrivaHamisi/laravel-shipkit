@@ -1,0 +1,36 @@
+<?php
+
+return [
+
+    /*
+    | Paths crawlers are asked to skip in production: signed-in areas, payment callbacks,
+    | download counters. robots.txt is advice, not security: protect these with auth too.
+    */
+    'private_paths' => [
+        '/admin/', '/dashboard', '/settings/', '/login', '/register', '/forgot-password',
+        '/reset-password', '/two-factor-challenge', '/email/', '/user/',
+    ],
+
+    /*
+    | Named routes of public pages that belong in the sitemap, after the home page. Content
+    | from the database (posts, products...) is added in a service provider; see Sitemap::add().
+    */
+    'sitemap_routes' => [
+        // 'about', 'contact',
+    ],
+
+    /*
+    | llms.txt: a plain-language summary for AI assistants (llmstxt.org).
+    */
+    'llms' => [
+        'summary' => env('APP_DESCRIPTION', ''),
+        'facts' => [
+            // 'Founded in 2014 in Nairobi, Kenya.',
+        ],
+        // Route name => description.
+        'pages' => [
+            // 'about' => 'Who we are and what we do',
+        ],
+    ],
+
+];

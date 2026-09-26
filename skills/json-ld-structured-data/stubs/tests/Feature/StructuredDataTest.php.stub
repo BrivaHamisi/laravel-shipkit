@@ -1,0 +1,96 @@
+<?php
+
+use App\Support\StructuredData;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Blade;
+use Illuminate\Support\Facades\Route;
+
+/**
+ * @return array<int, array<string, mixed>>
+ */
+function jsonLdGraph(string $html): array
+{
+    preg_match('#<script type="application/ld\+json">(.*?)</script>#s', $html, $match);
+
+    return json_decode($match[1] ?? '{}', true)['@graph'] ?? [];
+}
+
+beforeEach(function () {
+    config(['structured-data.organization' => [
+        'type' => 'NGO',
+        'name' => 'Grace Foundation',
+        'logo' => 'images/logo.png',
+        'same_as' => ['https://www.instagram.com/grace'],
+        'address' => ['locality' => 'Nairobi', 'country' => 'KE'],
+    ], 'structured-data.search_url' => '/search?q={search_term_string}']);
+
+    $layout = '<html><head>{{ app(\App\Support\StructuredData::class)->toScript() }}</head></html>';
+
+    Route::get('/_ld/post', function () use ($layout) {
+        app(StructuredData::class)->addArticle([
+            'url' => url('/_ld/post'),
+            'headline' => 'Healing together',
+            'image' => url('/images/post.jpg'),
+            'published_at' => Carbon::parse('2026-01-02 10:00:00'),
+            'author' => 'Jane Doe',
+        ]);
+        app(StructuredData::class)->addBreadcrumbs([['name' => 'Home', 'url' => url('/')], ['name' => 'Healing together']]);
+
+        return Blade::render($layout);
+    });
+
+    Route::get('/_ld/faq', function () use ($layout) {
+        app(StructuredData::class)->addFaqs([['question' => 'Where?', 'answer' => 'Nairobi.']]);
+
+        return Blade::render($layout);
+    });
+
+    Route::get('/_ld/plain', fn () => Blade::render($layout));
+
+    Route::get('/_ld/evil', function () use ($layout) {
+        app(StructuredData::class)->addArticle(['url' => url('/x'), 'headline' => 'Evil </script><script>alert(1)</script>']);
+
+        return Blade::render($layout);
+    });
+});
+
+test('every page describes the organisation and website', function () {
+    $graph = jsonLdGraph($this->get('/_ld/plain')->getContent());
+
+    expect(array_column($graph, '@type'))->toBe(['NGO', 'WebSite'])
+        ->and($graph[0])->toMatchArray([
+            'name' => 'Grace Foundation',
+            'logo' => asset('images/logo.png'),
+            'sameAs' => ['https://www.instagram.com/grace'],
+            'address' => ['@type' => 'PostalAddress', 'addressLocality' => 'Nairobi', 'addressCountry' => 'KE'],
+        ])
+        ->and($graph[1]['potentialAction']['target']['urlTemplate'])->toBe(url('/search?q={search_term_string}'));
+});
+
+test('pages add their own entities, linked to the organisation', function () {
+    $graph = jsonLdGraph($this->get('/_ld/post')->getContent());
+
+    expect(array_column($graph, '@type'))->toBe(['NGO', 'WebSite', 'BlogPosting', 'BreadcrumbList'])
+        ->and($graph[2])->toMatchArray([
+            'headline' => 'Healing together',
+            'datePublished' => '2026-01-02T10:00:00+00:00',
+            'author' => ['@type' => 'Person', 'name' => 'Jane Doe'],
+            'publisher' => ['@id' => StructuredData::organizationId()],
+        ])
+        ->and($graph[3]['itemListElement'][1])->toBe(['@type' => 'ListItem', 'position' => 2, 'name' => 'Healing together']);
+});
+
+test('entities from one request never leak into the next', function () {
+    $this->get('/_ld/post');
+    $this->get('/_ld/faq');
+
+    expect(array_column(jsonLdGraph($this->get('/_ld/faq')->getContent()), '@type'))->toBe(['NGO', 'WebSite', 'FAQPage'])
+        ->and(array_column(jsonLdGraph($this->get('/_ld/plain')->getContent()), '@type'))->toBe(['NGO', 'WebSite']);
+});
+
+test('text from the database cannot break out of the script tag', function () {
+    $html = $this->get('/_ld/evil')->getContent();
+
+    expect($html)->not->toContain('</script><script>alert(1)')
+        ->and(array_column(jsonLdGraph($html), '@type'))->toContain('BlogPosting');
+});

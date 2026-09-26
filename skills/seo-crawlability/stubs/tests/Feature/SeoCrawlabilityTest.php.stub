@@ -1,0 +1,78 @@
+<?php
+
+use App\Http\Middleware\NoIndex;
+use App\Support\Seo\Sitemap;
+use Illuminate\Support\Facades\Route;
+
+beforeEach(function () {
+    Route::get('/_seo/about', fn () => 'About')->name('about');
+    Route::get('/_seo/demo', fn () => view()->shared('robots', 'index, follow'))->middleware(NoIndex::class);
+    app('router')->getRoutes()->refreshNameLookups();
+    config(['seo.sitemap_routes' => ['about']]);
+});
+
+test('robots.txt blocks private paths and points to the sitemap in production', function () {
+    $this->app['env'] = 'production';
+
+    $this->get('/robots.txt')
+        ->assertOk()
+        ->assertHeader('Content-Type', 'text/plain; charset=UTF-8')
+        ->assertSee("Disallow: /admin/\n", escape: false)
+        ->assertSee('Sitemap: '.route('sitemap'), escape: false);
+});
+
+test('robots.txt keeps crawlers away from non-production copies of the site', function () {
+    $this->get('/robots.txt')->assertOk()->assertSee("User-agent: *\nDisallow: /\n", escape: false);
+});
+
+test('the sitemap lists configured pages and registered content as absolute URLs', function () {
+    app(Sitemap::class)->add(fn () => [
+        ['loc' => url('/posts/hello'), 'lastmod' => '2026-01-02 10:00:00'],
+        ['loc' => url('/posts/hello')],
+    ]);
+
+    $response = $this->get('/sitemap.xml')->assertOk()->assertHeader('Content-Type', 'application/xml; charset=UTF-8');
+
+    $xml = simplexml_load_string($response->getContent());
+    $locations = collect(iterator_to_array($xml->url, false))->map(fn ($url) => (string) $url->loc);
+
+    expect($locations->all())->toBe([url('/'), route('about'), url('/posts/hello')])
+        ->and((string) $xml->url[2]->lastmod)->toStartWith('2026-01-02T10:00:00');
+});
+
+test('sitemap sources are only queried when the sitemap is requested', function () {
+    $called = false;
+    app(Sitemap::class)->add(function () use (&$called) {
+        $called = true;
+
+        return [];
+    });
+
+    $this->get('/robots.txt');
+    expect($called)->toBeFalse();
+
+    $this->get('/sitemap.xml');
+    expect($called)->toBeTrue();
+});
+
+test('llms.txt is plain text with unescaped apostrophes and absolute links', function () {
+    config(['app.name' => "Grace's Bakery", 'seo.llms' => [
+        'summary' => "Kenya's friendliest bakery.",
+        'facts' => ['Open since 2014.'],
+        'pages' => ['about' => 'Who we are'],
+    ]]);
+
+    $this->get('/llms.txt')
+        ->assertOk()
+        ->assertHeader('Content-Type', 'text/plain; charset=UTF-8')
+        ->assertSee("# Grace's Bakery", escape: false)
+        ->assertSee("> Kenya's friendliest bakery.", escape: false)
+        ->assertSee('- [About]('.route('about').'): Who we are', escape: false)
+        ->assertDontSee('&#039;', escape: false);
+});
+
+test('noindex pages send the header and share the robots directive with views', function () {
+    $this->get('/_seo/demo')
+        ->assertHeader('X-Robots-Tag', 'noindex, follow')
+        ->assertSee('noindex, follow');
+});

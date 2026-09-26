@@ -1,0 +1,30 @@
+<?php
+
+/*
+| The organisation behind the site, printed on every page as schema.org JSON-LD.
+| Pick the most specific type: Organization, NGO, LocalBusiness, Restaurant, Store,
+| EducationalOrganization, MedicalBusiness... (https://schema.org/Organization).
+*/
+
+return [
+
+    'organization' => [
+        'type' => 'Organization',
+        'name' => env('APP_NAME'),
+        'alternate_name' => null,
+        'description' => null,
+        // Absolute URL or a path under public/, at least 112 × 112 pixels.
+        'logo' => null,
+        'founding_date' => null,
+        'email' => null,
+        'telephone' => null,
+        // e.g. ['street' => '...', 'locality' => 'Nairobi', 'postal_code' => '00200', 'country' => 'KE']
+        'address' => [],
+        // Official profiles: Facebook, Instagram, X, LinkedIn, YouTube, Wikipedia...
+        'same_as' => [],
+    ],
+
+    // A search results URL with {search_term_string}, e.g. '/search?q={search_term_string}', or null.
+    'search_url' => null,
+
+];

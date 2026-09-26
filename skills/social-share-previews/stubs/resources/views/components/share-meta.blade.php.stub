@@ -1,0 +1,43 @@
+@props(['title' => null, 'description' => null, 'image' => null, 'imageAlt' => null, 'type' => 'website', 'robots' => null, 'canonical' => null])
+
+{{-- Search engine and link-preview tags (WhatsApp, Facebook, LinkedIn, X, Slack, iMessage).
+     Previews need absolute URLs, and JPEG or PNG images: WebP often shows no image. --}}
+@php
+    $siteName = config('app.name');
+    $shareTitle = $title ? "{$title} | {$siteName}" : $siteName;
+    $shareDescription = \Illuminate\Support\Str::limit(\Illuminate\Support\Str::squish(strip_tags((string) ($description ?: config('share.description')))), 160);
+    $shareImage = $image ?: asset(config('share.image'));
+    $canonicalUrl = $canonical ?: url()->current();
+@endphp
+
+<title>{{ $shareTitle }}</title>
+@if ($shareDescription !== '')
+<meta name="description" content="{{ $shareDescription }}">
+@endif
+<meta name="robots" content="{{ $robots ?? 'index, follow, max-snippet:-1, max-image-preview:large, max-video-preview:-1' }}">
+<link rel="canonical" href="{{ $canonicalUrl }}">
+
+<meta property="og:site_name" content="{{ $siteName }}">
+<meta property="og:type" content="{{ $type }}">
+<meta property="og:locale" content="{{ config('share.locale', 'en_US') }}">
+<meta property="og:url" content="{{ $canonicalUrl }}">
+<meta property="og:title" content="{{ $title ?? $siteName }}">
+@if ($shareDescription !== '')
+<meta property="og:description" content="{{ $shareDescription }}">
+@endif
+<meta property="og:image" content="{{ $shareImage }}">
+<meta property="og:image:alt" content="{{ $imageAlt ?? $title ?? $siteName }}">
+@unless ($image)
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+@endunless
+
+<meta name="twitter:card" content="summary_large_image">
+@if (config('share.x_handle'))
+<meta name="twitter:site" content="{{ config('share.x_handle') }}">
+@endif
+<meta name="twitter:title" content="{{ $title ?? $siteName }}">
+@if ($shareDescription !== '')
+<meta name="twitter:description" content="{{ $shareDescription }}">
+@endif
+<meta name="twitter:image" content="{{ $shareImage }}">

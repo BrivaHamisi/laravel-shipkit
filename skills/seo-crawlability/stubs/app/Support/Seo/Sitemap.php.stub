@@ -1,0 +1,56 @@
+<?php
+
+namespace App\Support\Seo;
+
+use Closure;
+use Illuminate\Container\Attributes\Singleton;
+use DateTimeInterface;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
+
+/**
+ * Collects the URLs for sitemap.xml: the home page, the named routes in config('seo.sitemap_routes'), plus
+ * sources registered by the app, e.g. in AppServiceProvider::boot():
+ *
+ *   app(Sitemap::class)->add(fn () => Post::published()->get()->map(fn (Post $post) => [
+ *       'loc' => route('posts.show', $post),
+ *       'lastmod' => $post->updated_at,
+ *   ]));
+ *
+ * Sources are closures, so nothing is queried until sitemap.xml is actually requested.
+ * On Laravel 11, which has no #[Singleton], register it: $this->app->singleton(Sitemap::class).
+ */
+#[Singleton]
+class Sitemap
+{
+    /**
+     * @var list<Closure(): iterable<array{loc: string, lastmod?: DateTimeInterface|string|null}>>
+     */
+    private array $sources = [];
+
+    /**
+     * @param  Closure(): iterable<array{loc: string, lastmod?: DateTimeInterface|string|null}>  $source
+     */
+    public function add(Closure $source): void
+    {
+        $this->sources[] = $source;
+    }
+
+    /**
+     * Every URL, absolute and unique, with lastmod as an ISO 8601 date when known.
+     *
+     * @return Collection<int, array{loc: string, lastmod: string|null}>
+     */
+    public function urls(): Collection
+    {
+        return collect([['loc' => url('/')]])
+            ->concat(collect(config('seo.sitemap_routes', []))->map(fn (string $name) => ['loc' => route($name)]))
+            ->concat(collect($this->sources)->flatMap(fn (Closure $source) => collect($source())))
+            ->map(fn (array $url) => [
+                'loc' => $url['loc'],
+                'lastmod' => filled($url['lastmod'] ?? null) ? Carbon::parse($url['lastmod'])->toAtomString() : null,
+            ])
+            ->unique('loc')
+            ->values();
+    }
+}

@@ -1,0 +1,49 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Support\Seo\Sitemap;
+use Illuminate\Http\Response;
+
+/**
+ * robots.txt, sitemap.xml and llms.txt, built from APP_URL and the database so they always
+ * list the site's real, absolute URLs, and never let a staging copy get indexed.
+ */
+class SeoController extends Controller
+{
+    /**
+     * Outside production, crawlers are asked to stay away entirely.
+     */
+    public function robots(): Response
+    {
+        $lines = ['User-agent: *'];
+
+        if (app()->isProduction()) {
+            foreach (config('seo.private_paths', []) as $path) {
+                $lines[] = "Disallow: {$path}";
+            }
+
+            $lines[] = 'Allow: /';
+            $lines[] = '';
+            $lines[] = 'Sitemap: '.route('sitemap');
+        } else {
+            $lines[] = 'Disallow: /';
+        }
+
+        return response(implode("\n", $lines)."\n")->header('Content-Type', 'text/plain; charset=UTF-8');
+    }
+
+    public function sitemap(Sitemap $sitemap): Response
+    {
+        return response()
+            ->view('seo.sitemap', ['urls' => $sitemap->urls()])
+            ->header('Content-Type', 'application/xml; charset=UTF-8');
+    }
+
+    public function llms(): Response
+    {
+        return response()
+            ->view('seo.llms', ['llms' => config('seo.llms', [])])
+            ->header('Content-Type', 'text/plain; charset=UTF-8');
+    }
+}

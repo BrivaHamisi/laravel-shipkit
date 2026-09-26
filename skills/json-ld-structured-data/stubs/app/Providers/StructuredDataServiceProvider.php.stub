@@ -1,0 +1,23 @@
+<?php
+
+namespace App\Providers;
+
+use App\Support\StructuredData;
+use Illuminate\Foundation\Http\Events\RequestHandled;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\ServiceProvider;
+
+class StructuredDataServiceProvider extends ServiceProvider
+{
+    public function register(): void
+    {
+        $this->app->scoped(StructuredData::class);
+    }
+
+    public function boot(): void
+    {
+        // Each page collects its own entities. Start fresh once a response is sent, even when the
+        // same process serves several requests (tests, Octane), or pages inherit each other's data.
+        Event::listen(RequestHandled::class, fn () => $this->app->forgetInstance(StructuredData::class));
+    }
+}

@@ -1,0 +1,25 @@
+{{-- Served as text/plain, so values are printed raw: there is no HTML to escape, and {{ }} would turn ' into &#039;. --}}
+# {!! config('app.name') !!}
+@if (filled($llms['summary'] ?? null))
+
+> {!! $llms['summary'] !!}
+@endif
+@if (! empty($llms['facts']))
+
+Key facts:
+
+@foreach ($llms['facts'] as $fact)
+- {!! $fact !!}
+@endforeach
+@endif
+
+## Pages
+
+- [Home]({!! url('/') !!})
+@foreach ($llms['pages'] ?? [] as $route => $description)
+- [{!! \Illuminate\Support\Str::headline($route) !!}]({!! route($route) !!}): {!! $description !!}
+@endforeach
+
+## Optional
+
+- [Sitemap]({!! route('sitemap') !!})

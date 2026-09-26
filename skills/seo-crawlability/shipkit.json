@@ -1,0 +1,4 @@
+{
+    "routes": ["routes/seo.php"],
+    "delete": ["public/robots.txt"]
+}
