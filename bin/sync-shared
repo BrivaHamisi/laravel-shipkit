@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Copy the shared payments model into every skill that ships it.
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+for skill in mpesa-stk-push paypal-checkout; do
+    cp -R "$root/.shared/payments/." "$root/skills/$skill/stubs/"
+done
+echo "Synced .shared/payments into the payment skills."

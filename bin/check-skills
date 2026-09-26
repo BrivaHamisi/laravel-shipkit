@@ -1,0 +1,77 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * Checks every skill is installable by `php artisan boost:add-skill`:
+ * - SKILL.md frontmatter has name (matching the folder), description and license.
+ * - No bare .php files: Boost refuses to download them, so code must ship as .php.stub.
+ * - shipkit.json, if present, is valid JSON.
+ * - Files shared between skills (the payments model) are identical to .shared/.
+ */
+$root = dirname(__DIR__);
+$errors = [];
+
+foreach (glob("{$root}/skills/*", GLOB_ONLYDIR) as $dir) {
+    $name = basename($dir);
+    $skill = "{$dir}/SKILL.md";
+
+    if (! is_file($skill)) {
+        $errors[] = "{$name}: missing SKILL.md";
+
+        continue;
+    }
+
+    if (! preg_match('/\A---\n(.*?)\n---\n/s', file_get_contents($skill), $match)) {
+        $errors[] = "{$name}: SKILL.md has no frontmatter";
+
+        continue;
+    }
+
+    preg_match('/^name:\s*(.+)$/m', $match[1], $skillName);
+    preg_match('/^description:\s*"(.+)"$/m', $match[1], $description);
+
+    if (trim($skillName[1] ?? '') !== $name) {
+        $errors[] = "{$name}: frontmatter name must be \"{$name}\"";
+    }
+
+    if (strlen($description[1] ?? '') < 80 || strlen($description[1] ?? '') > 1024) {
+        $errors[] = "{$name}: description must be a quoted string of 80-1024 characters saying what it does and when to use it";
+    }
+
+    if (! preg_match('/^license:\s*MIT$/m', $match[1])) {
+        $errors[] = "{$name}: license must be MIT";
+    }
+
+    $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS));
+
+    foreach ($files as $file) {
+        if (preg_match('/\.(php\d?|phar|phtml)$/i', $file->getFilename())) {
+            $errors[] = "{$name}: ".substr($file->getPathname(), strlen($dir) + 1).' must end in .stub, or boost:add-skill will skip it';
+        }
+    }
+
+    if (is_file("{$dir}/shipkit.json") && json_decode(file_get_contents("{$dir}/shipkit.json")) === null) {
+        $errors[] = "{$name}: shipkit.json is not valid JSON";
+    }
+}
+
+$shared = "{$root}/.shared/payments";
+$sharedFiles = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($shared, FilesystemIterator::SKIP_DOTS));
+
+foreach (['mpesa-stk-push', 'paypal-checkout'] as $skill) {
+    foreach ($sharedFiles as $file) {
+        $relative = substr($file->getPathname(), strlen($shared) + 1);
+        $copy = "{$root}/skills/{$skill}/stubs/{$relative}";
+
+        if (! is_file($copy) || file_get_contents($copy) !== file_get_contents($file->getPathname())) {
+            $errors[] = "{$skill}: stubs/{$relative} differs from .shared/payments (run bin/sync-shared)";
+        }
+    }
+}
+
+if ($errors !== []) {
+    fwrite(STDERR, implode("\n", $errors)."\n");
+    exit(1);
+}
+
+echo 'All '.count(glob("{$root}/skills/*", GLOB_ONLYDIR))." skills are valid.\n";
