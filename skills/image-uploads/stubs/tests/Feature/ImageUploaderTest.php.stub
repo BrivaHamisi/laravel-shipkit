@@ -1,0 +1,137 @@
+<?php
+
+use App\Models\Concerns\HasImageUrls;
+use App\Support\ImageUploader;
+use Illuminate\Database\Eloquent\Casts\Attribute;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
+
+uses(RefreshDatabase::class);
+
+class ImageUploaderTestPost extends Model
+{
+    use HasImageUrls;
+
+    protected $table = 'image_uploader_test_posts';
+
+    protected $guarded = [];
+
+    protected function imageUrls(): Attribute
+    {
+        return Attribute::get(fn () => $this->resolveImageUrls($this->image, 'posts'));
+    }
+}
+
+beforeEach(function () {
+    Storage::fake('public');
+    Schema::create('image_uploader_test_posts', function ($table) {
+        $table->id();
+        $table->string('image')->nullable();
+        $table->timestamps();
+    });
+    config(['images.models' => [ImageUploaderTestPost::class => ['image', 'posts']]]);
+});
+
+function storedImageSize(string $path): array
+{
+    return array_slice(getimagesizefromstring(Storage::disk('public')->get($path)), 0, 2);
+}
+
+test('uploads are saved as WebP at every configured size', function () {
+    $path = app(ImageUploader::class)->store(UploadedFile::fake()->image('photo.jpg', 3000, 2000), 'posts');
+    $directory = dirname($path);
+
+    expect(storedImageSize($path))->toBe([1920, 1280])
+        ->and(storedImageSize("{$directory}/card.webp"))->toBe([400, 532])
+        ->and(storedImageSize("{$directory}/detail.webp"))->toBe([1024, 683])
+        ->and(storedImageSize("{$directory}/thumb.webp"))->toBe([80, 80])
+        ->and(getimagesizefromstring(Storage::disk('public')->get($path))['mime'])->toBe('image/webp');
+});
+
+test('link preview sizes are saved as JPEG', function () {
+    $path = app(ImageUploader::class)->store(UploadedFile::fake()->image('photo.jpg', 3000, 2000), 'posts');
+    $share = dirname($path).'/share.jpg';
+
+    expect(storedImageSize($share))->toBe([1200, 630])
+        ->and(getimagesizefromstring(Storage::disk('public')->get($share))['mime'])->toBe('image/jpeg')
+        ->and(ImageUploaderTestPost::create(['image' => $path])->image_urls['share'])->toEndWith('/share.jpg');
+});
+
+test('portrait photos keep their top when cropped to a landscape size', function () {
+    // A tall photo: red top half (where a face would be), blue bottom half.
+    $canvas = imagecreatetruecolor(400, 1200);
+    imagefilledrectangle($canvas, 0, 0, 399, 599, imagecolorallocate($canvas, 255, 0, 0));
+    imagefilledrectangle($canvas, 0, 600, 399, 1199, imagecolorallocate($canvas, 0, 0, 255));
+    $file = tempnam(sys_get_temp_dir(), 'portrait').'.jpg';
+    imagejpeg($canvas, $file, 95);
+
+    $path = app(ImageUploader::class)->store(new UploadedFile($file, 'portrait.jpg', test: true), 'posts');
+    $share = imagecreatefromstring(Storage::disk('public')->get(dirname($path).'/share.jpg'));
+    $middle = imagecolorsforindex($share, imagecolorat($share, 600, 315));
+
+    expect($middle['red'])->toBeGreaterThan(200)->and($middle['blue'])->toBeLessThan(60);
+});
+
+test('logos are scaled to fit, never cropped', function () {
+    $path = app(ImageUploader::class)->store(UploadedFile::fake()->image('logo.png', 1000, 1000), 'logos');
+
+    expect(storedImageSize(dirname($path).'/logo.webp'))->toBe([102, 102]);
+});
+
+test('small uploads are not enlarged beyond their original width', function () {
+    $path = app(ImageUploader::class)->store(UploadedFile::fake()->image('small.png', 640, 480), 'avatars');
+
+    expect(storedImageSize($path))->toBe([640, 480])
+        ->and(storedImageSize(dirname($path).'/card.webp'))->toBe([500, 500]);
+});
+
+test('deleting a sized upload removes its folder only', function () {
+    $uploader = app(ImageUploader::class);
+    $keep = $uploader->store(UploadedFile::fake()->image('a.jpg', 800, 800), 'avatars');
+    $remove = $uploader->store(UploadedFile::fake()->image('b.jpg', 800, 800), 'avatars');
+
+    $uploader->delete($remove);
+
+    expect(Storage::disk('public')->allFiles(dirname($remove)))->toBe([]);
+    Storage::disk('public')->assertExists($keep);
+});
+
+test('older single-file uploads are deleted on their own, never their whole folder', function () {
+    Storage::disk('public')->put('posts/legacy-a.jpg', UploadedFile::fake()->image('a.jpg')->getContent());
+    Storage::disk('public')->put('posts/legacy-b.jpg', UploadedFile::fake()->image('b.jpg')->getContent());
+
+    app(ImageUploader::class)->delete('posts/legacy-a.jpg');
+
+    Storage::disk('public')->assertMissing('posts/legacy-a.jpg');
+    Storage::disk('public')->assertExists('posts/legacy-b.jpg');
+});
+
+test('bundled images get the same URL for every size', function () {
+    expect(ImageUploaderTestPost::create(['image' => 'assets/images/placeholder.jpg'])->image_urls)
+        ->toHaveKeys(['original', 'card', 'detail', 'share', 'thumb'])
+        ->each->toBe(asset('assets/images/placeholder.jpg'));
+});
+
+test('the regenerate command rebuilds missing sizes and converts older uploads', function () {
+    $sized = ImageUploaderTestPost::create([
+        'image' => app(ImageUploader::class)->store(UploadedFile::fake()->image('a.jpg', 1200, 800), 'posts'),
+    ]);
+    Storage::disk('public')->delete(dirname($sized->image).'/thumb.webp');
+
+    Storage::disk('public')->put('posts/legacy.jpg', UploadedFile::fake()->image('legacy.jpg', 1200, 800)->getContent());
+    $legacy = ImageUploaderTestPost::create(['image' => 'posts/legacy.jpg']);
+
+    $this->artisan('images:regenerate')->assertSuccessful();
+
+    Storage::disk('public')->assertExists(dirname($sized->image).'/thumb.webp');
+    expect($legacy->refresh()->image)->toEndWith('/original.webp');
+    Storage::disk('public')->assertExists(dirname($legacy->image).'/card.webp');
+    Storage::disk('public')->assertMissing('posts/legacy.jpg');
+});
+
+test('unknown size types fail loudly', function () {
+    app(ImageUploader::class)->store(UploadedFile::fake()->image('a.jpg'), 'nope');
+})->throws(InvalidArgumentException::class, 'No image sizes are configured for [nope].');

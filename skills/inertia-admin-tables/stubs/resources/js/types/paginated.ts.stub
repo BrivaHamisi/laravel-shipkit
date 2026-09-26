@@ -1,0 +1,16 @@
+/**
+ * A Laravel LengthAwarePaginator as Inertia receives it (->paginate()->withQueryString()).
+ */
+export type Paginated<T> = {
+    data: T[];
+    current_page: number;
+    last_page: number;
+    per_page: number;
+    total: number;
+    from: number | null;
+    to: number | null;
+    prev_page_url: string | null;
+    next_page_url: string | null;
+    /** Laravel's page links: "Previous", the numbered pages (with "..." gaps), then "Next". */
+    links: { url: string | null; label: string; active: boolean }[];
+};

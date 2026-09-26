@@ -1,0 +1,116 @@
+<?php
+
+namespace App\Console\Commands;
+
+use App\Support\WordPress\WordPressContent;
+use App\Support\WordPress\WordPressDump;
+use Illuminate\Console\Command;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\File;
+use RuntimeException;
+
+/**
+ * Reads published posts from a WordPress SQL dump and writes them as clean JSON, ready for a
+ * seeder: no WordPress database, plugin or running site needed.
+ */
+class ExportWordPressPosts extends Command
+{
+    protected $signature = 'wordpress:export-posts
+        {dump : Path to the .sql dump}
+        {--output=storage/app/wordpress/posts.json : Where to write the JSON}
+        {--prefix=wp_ : The WordPress table prefix}
+        {--type=post : Post types to export, comma separated (post,page)}
+        {--timezone= : The old site\'s timezone, used when a post has no GMT date (defaults to the app timezone)}';
+
+    protected $description = 'Export published WordPress posts from an SQL dump to JSON for seeding';
+
+    public function handle(): int
+    {
+        $dump = new WordPressDump((string) $this->argument('dump'));
+        $prefix = (string) $this->option('prefix');
+        $types = array_map('trim', explode(',', (string) $this->option('type')));
+
+        try {
+            $rows = collect($dump->rows($prefix.'posts'));
+        } catch (RuntimeException $exception) {
+            $this->components->error($exception->getMessage());
+
+            return self::FAILURE;
+        }
+
+        $attachments = $rows->where('post_type', 'attachment')->pluck('guid', 'ID');
+        $thumbnails = collect($dump->rows($prefix.'postmeta'))->where('meta_key', '_thumbnail_id')->pluck('meta_value', 'post_id');
+        $authors = collect($dump->rows($prefix.'users'))->pluck('display_name', 'ID');
+        [$categories, $tags] = $this->terms($dump, $prefix);
+
+        $posts = $rows
+            ->filter(fn (array $row) => in_array($row['post_type'], $types, true) && $row['post_status'] === 'publish')
+            ->sortBy('post_date')
+            ->map(fn (array $row) => [
+                'wordpress_id' => (int) $row['ID'],
+                'type' => $row['post_type'],
+                'title' => html_entity_decode((string) $row['post_title'], ENT_QUOTES | ENT_HTML5),
+                'slug' => urldecode((string) $row['post_name']),
+                'excerpt' => filled($row['post_excerpt'] ?? null) ? trim((string) $row['post_excerpt']) : null,
+                'html' => WordPressContent::clean((string) $row['post_content']),
+                'published_at' => $this->publishedAt($row),
+                'author' => $authors[$row['post_author']] ?? null,
+                'categories' => $categories[$row['ID']] ?? [],
+                'tags' => $tags[$row['ID']] ?? [],
+                'featured_image' => $attachments[(int) ($thumbnails[$row['ID']] ?? 0)] ?? null,
+            ])
+            ->values();
+
+        $output = base_path((string) $this->option('output'));
+        File::ensureDirectoryExists(dirname($output));
+        File::put($output, json_encode($posts, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR));
+
+        $this->components->info("Exported {$posts->count()} post(s) to {$this->option('output')}.");
+
+        return self::SUCCESS;
+    }
+
+    /**
+     * Category and tag names per post ID. WordPress stores term names HTML-escaped ("News &amp; Updates").
+     *
+     * @return array{0: array<int, list<string>>, 1: array<int, list<string>>}
+     */
+    private function terms(WordPressDump $dump, string $prefix): array
+    {
+        $names = collect($dump->rows($prefix.'terms'))->mapWithKeys(fn (array $term) => [
+            $term['term_id'] => html_entity_decode((string) $term['name'], ENT_QUOTES | ENT_HTML5),
+        ]);
+        $taxonomies = collect($dump->rows($prefix.'term_taxonomy'))->keyBy('term_taxonomy_id');
+        [$categories, $tags] = [[], []];
+
+        foreach ($dump->rows($prefix.'term_relationships') as $relationship) {
+            $taxonomy = $taxonomies[$relationship['term_taxonomy_id']] ?? null;
+            $name = $taxonomy ? ($names[$taxonomy['term_id']] ?? null) : null;
+
+            match ($taxonomy['taxonomy'] ?? null) {
+                'category' => $name && $name !== 'Uncategorized' ? $categories[$relationship['object_id']][] = $name : null,
+                'post_tag' => $name ? $tags[$relationship['object_id']][] = $name : null,
+                default => null,
+            };
+        }
+
+        return [$categories, $tags];
+    }
+
+    /**
+     * WordPress keeps post_date in the site's timezone and post_date_gmt in UTC; drafts and
+     * some imports have a zero GMT date, so fall back to the local date in the old site's timezone.
+     *
+     * @param  array<string, int|string|null>  $row
+     */
+    private function publishedAt(array $row): string
+    {
+        $gmt = (string) ($row['post_date_gmt'] ?? '');
+
+        if ($gmt !== '' && ! str_starts_with($gmt, '0000-00-00')) {
+            return Carbon::parse($gmt, 'UTC')->toIso8601String();
+        }
+
+        return Carbon::parse((string) $row['post_date'], $this->option('timezone') ?: config('app.timezone'))->utc()->toIso8601String();
+    }
+}

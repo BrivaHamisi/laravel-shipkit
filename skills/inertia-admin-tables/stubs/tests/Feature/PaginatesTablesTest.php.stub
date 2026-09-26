@@ -1,0 +1,40 @@
+<?php
+
+use App\Http\Controllers\Concerns\PaginatesTables;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Route;
+
+uses(RefreshDatabase::class);
+
+class PaginatesTablesTestController
+{
+    use PaginatesTables;
+
+    public function __invoke()
+    {
+        return User::query()->orderBy('id')->paginate($this->perPage())->withQueryString();
+    }
+}
+
+beforeEach(function () {
+    Route::get('/_tables/users', PaginatesTablesTestController::class);
+    User::factory()->count(30)->create();
+});
+
+test('tables show 25 rows by default', function () {
+    $this->getJson('/_tables/users')->assertJson(['per_page' => 25, 'last_page' => 2, 'total' => 30])->assertJsonCount(25, 'data');
+});
+
+test('admins can choose how many rows a table shows, and page links keep the choice and filters', function () {
+    $response = $this->getJson('/_tables/users?per_page=10&q=grace')
+        ->assertJson(['per_page' => 10, 'last_page' => 3])
+        ->assertJsonCount(10, 'data');
+
+    expect($response->json('next_page_url'))->toContain('per_page=10')->toContain('q=grace')
+        ->and(collect($response->json('links'))->pluck('label')->slice(1, -1)->values()->all())->toBe(['1', '2', '3']);
+});
+
+test('page sizes outside the options fall back to the default', function (mixed $perPage) {
+    $this->getJson('/_tables/users?per_page='.$perPage)->assertJson(['per_page' => 25]);
+})->with([5000, 0, -1, 'abc', 7]);

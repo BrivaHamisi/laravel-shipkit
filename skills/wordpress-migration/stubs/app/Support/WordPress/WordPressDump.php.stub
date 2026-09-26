@@ -1,0 +1,197 @@
+<?php
+
+namespace App\Support\WordPress;
+
+use Generator;
+use RuntimeException;
+
+/**
+ * Reads table rows from a MySQL dump of a WordPress site (as exported by phpMyAdmin,
+ * mysqldump or most hosts), one row at a time, so the whole file never has to fit in memory.
+ */
+class WordPressDump
+{
+    /**
+     * MySQL string escapes and the characters they stand for.
+     */
+    private const ESCAPES = ['0' => "\0", 'n' => "\n", 'r' => "\r", 't' => "\t", 'Z' => "\x1a", 'b' => "\x08"];
+
+    public function __construct(private string $path) {}
+
+    /**
+     * Every row of a table, keyed by column name.
+     *
+     * @return Generator<int, array<string, int|string|null>>
+     */
+    public function rows(string $table): Generator
+    {
+        $handle = @fopen($this->path, 'rb');
+
+        if ($handle === false) {
+            throw new RuntimeException("Could not open the SQL dump at [{$this->path}].");
+        }
+
+        $insert = "INSERT INTO `{$table}`";
+        $create = "CREATE TABLE `{$table}` (";
+        // mysqldump leaves the column list out of INSERTs, so it comes from CREATE TABLE.
+        $tableColumns = [];
+
+        try {
+            while (($line = fgets($handle)) !== false) {
+                if (str_starts_with($line, $create) || str_starts_with($line, 'CREATE TABLE IF NOT EXISTS `'.$table.'` (')) {
+                    $tableColumns = $this->createTableColumns($handle);
+
+                    continue;
+                }
+
+                if (! str_starts_with($line, $insert)) {
+                    continue;
+                }
+
+                $rest = ltrim(substr($line, strlen($insert)));
+
+                if (str_starts_with($rest, '(')) {
+                    $valuesAt = (int) strpos($rest, ') VALUES');
+                    $columns = array_map(
+                        fn (string $column): string => trim($column, ' `'),
+                        explode(',', substr($rest, 1, $valuesAt - 1)),
+                    );
+                    $values = substr($rest, $valuesAt + strlen(') VALUES'));
+                } else {
+                    $columns = $tableColumns;
+                    $values = substr($rest, strlen('VALUES'));
+                }
+
+                if ($columns === []) {
+                    throw new RuntimeException("The dump has no column names for [{$table}]: export it with phpMyAdmin or mysqldump --complete-insert.");
+                }
+
+                yield from $this->parseValues($handle, $values, $columns);
+            }
+        } finally {
+            fclose($handle);
+        }
+    }
+
+    /**
+     * Parse the "(…), (…);" tuples of one INSERT statement, reading more lines as needed.
+     *
+     * @param  resource  $handle
+     * @param  list<string>  $columns
+     * @return Generator<int, array<string, int|string|null>>
+     */
+    private function parseValues($handle, string $buffer, array $columns): Generator
+    {
+        $row = [];
+        $value = '';
+        $inRow = false;
+        $inString = false;
+        $quoted = false;
+        $i = 0;
+
+        while (true) {
+            $length = strlen($buffer);
+
+            while ($i < $length) {
+                $char = $buffer[$i];
+
+                if ($inString) {
+                    if ($char === '\\' || $char === "'") {
+                        if ($i + 1 >= $length) {
+                            break; // The escape or closing quote continues on the next line.
+                        }
+
+                        $next = $buffer[$i + 1];
+
+                        if ($char === '\\') {
+                            $value .= self::ESCAPES[$next] ?? $next;
+                            $i += 2;
+                        } elseif ($next === "'") {
+                            $value .= "'";
+                            $i += 2;
+                        } else {
+                            $inString = false;
+                            $i++;
+                        }
+
+                        continue;
+                    }
+
+                    $run = strcspn($buffer, "'\\", $i);
+                    $value .= substr($buffer, $i, $run);
+                    $i += $run;
+
+                    continue;
+                }
+
+                if (! $inRow) {
+                    if ($char === ';') {
+                        return;
+                    }
+
+                    if ($char === '(') {
+                        [$inRow, $row, $value, $quoted] = [true, [], '', false];
+                    }
+
+                    $i++;
+
+                    continue;
+                }
+
+                if ($char === "'") {
+                    [$inString, $quoted, $value] = [true, true, ''];
+                } elseif ($char === ',' || $char === ')') {
+                    $row[] = $quoted ? $value : $this->scalar(trim($value));
+                    [$value, $quoted] = ['', false];
+
+                    if ($char === ')') {
+                        $inRow = false;
+
+                        yield array_combine($columns, $row);
+                    }
+                } else {
+                    $value .= $char;
+                }
+
+                $i++;
+            }
+
+            $more = fgets($handle);
+
+            if ($more === false) {
+                return;
+            }
+
+            $buffer = substr($buffer, $i).$more;
+            $i = 0;
+        }
+    }
+
+    /**
+     * Column names from the lines of a CREATE TABLE statement, which each start with `name`.
+     *
+     * @param  resource  $handle
+     * @return list<string>
+     */
+    private function createTableColumns($handle): array
+    {
+        $columns = [];
+
+        while (($line = fgets($handle)) !== false && ! str_starts_with(ltrim($line), ')')) {
+            if (preg_match('/^\s*`([^`]+)`/', $line, $match)) {
+                $columns[] = $match[1];
+            }
+        }
+
+        return $columns;
+    }
+
+    private function scalar(string $token): int|string|null
+    {
+        return match (true) {
+            $token === 'NULL' => null,
+            (bool) preg_match('/^-?\d+$/', $token) => (int) $token,
+            default => $token,
+        };
+    }
+}

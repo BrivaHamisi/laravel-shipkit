@@ -1,0 +1,69 @@
+<?php
+
+namespace App\Support;
+
+/**
+ * Heuristics that spot bot and attack entries in imported form data (sign-ups, donations,
+ * contact messages): code injected into fields, throwaway or example addresses, floods from
+ * one plus-addressed inbox, and random-letter names. Only apply them to entries nobody
+ * verified; a completed payment is real, whatever its name looks like.
+ */
+class SpamSignals
+{
+    /**
+     * @var list<string>
+     */
+    public const THROWAWAY_DOMAINS = [
+        'example.com', 'example.net', 'example.org', 'mailinator.com', 'guerrillamail.com',
+        'sharklasers.com', 'yopmail.com', '10minutemail.com', 'tempmail.com', 'trashmail.com',
+    ];
+
+    /**
+     * @param  array<string, int>  $plusAddressCounts  From plusAddressCounts(), to spot floods.
+     */
+    public static function looksFake(string $firstName, string $lastName, string $email, array $plusAddressCounts = []): bool
+    {
+        $first = trim($firstName);
+        $last = trim($lastName);
+        $name = trim($first.' '.$last);
+        $email = strtolower(trim($email));
+        [$local, $domain] = array_pad(explode('@', $email, 2), 2, '');
+
+        return preg_match('/O:\d+:"|[{};<>|]|base64|https?:|www\./i', $name.' '.$email) === 1
+            || in_array($domain, self::THROWAWAY_DOMAINS, true)
+            || ($plusAddressCounts[self::baseAddress($email)] ?? 0) >= 3
+            || substr_count($local, '.') >= 3
+            || preg_match('/^test\b/i', $name) === 1
+            || ($first !== '' && strcasecmp($first, $last) === 0)
+            || collect(preg_split('/\s+/', $name) ?: [])->contains(
+                fn (string $word): bool => preg_match_all('/[a-z][A-Z]/', $word) >= 2,
+            );
+    }
+
+    /**
+     * How many entries share each plus-addressed inbox (name+tag@domain counts as name@domain).
+     *
+     * @param  iterable<string>  $emails
+     * @return array<string, int>
+     */
+    public static function plusAddressCounts(iterable $emails): array
+    {
+        $counts = [];
+
+        foreach ($emails as $email) {
+            $email = strtolower(trim($email));
+
+            if (str_contains($email, '+')) {
+                $base = self::baseAddress($email);
+                $counts[$base] = ($counts[$base] ?? 0) + 1;
+            }
+        }
+
+        return $counts;
+    }
+
+    private static function baseAddress(string $email): string
+    {
+        return (string) preg_replace('/\+[^@]*@/', '@', $email);
+    }
+}

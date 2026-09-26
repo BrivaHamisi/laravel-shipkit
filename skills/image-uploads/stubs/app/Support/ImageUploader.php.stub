@@ -1,0 +1,188 @@
+<?php
+
+namespace App\Support;
+
+use Illuminate\Contracts\Filesystem\Filesystem;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use Intervention\Image\ImageManager;
+use Intervention\Image\Interfaces\ImageInterface;
+use InvalidArgumentException;
+
+/**
+ * Stores image uploads as a set of files sized for the website.
+ *
+ * An upload for type "posts" becomes posts/{uuid}/original.webp plus one file per size in
+ * config('images.sizes.posts'), e.g. posts/{uuid}/card.webp and posts/{uuid}/share.jpg.
+ * Models keep the path of original.webp; the other sizes sit beside it.
+ */
+class ImageUploader
+{
+    /**
+     * Resize and store an upload, returning the path of its original.webp.
+     */
+    public function store(UploadedFile $upload, string $type): string
+    {
+        $directory = $type.'/'.Str::uuid();
+
+        $this->writeSizes($this->manager()->read($upload->getRealPath()), $directory, $type);
+
+        return $directory.'/original.webp';
+    }
+
+    /**
+     * Rebuild every size of an existing upload, returning its (possibly new) path.
+     *
+     * Uploads saved as a single file before sizes existed are converted into a sized folder,
+     * and the old file is removed.
+     */
+    public function regenerate(string $path, string $type): string
+    {
+        $image = $this->manager()->read($this->disk()->get($path) ?? '');
+
+        if (self::isSized($path)) {
+            // Leave original.webp as it is: re-encoding it would lose a little quality every run.
+            $this->writeSizes($image, dirname($path), $type, withOriginal: false);
+
+            return $path;
+        }
+
+        $directory = $type.'/'.Str::uuid();
+        $this->writeSizes($image, $directory, $type);
+        $this->disk()->delete($path);
+
+        return $directory.'/original.webp';
+    }
+
+    /**
+     * Width and height of a stored image, e.g. for a masonry gallery.
+     *
+     * @return array{width: int, height: int}|null
+     */
+    public function dimensions(string $path): ?array
+    {
+        $contents = $this->disk()->get($path);
+        $size = $contents === null ? false : getimagesizefromstring($contents);
+
+        return $size === false ? null : ['width' => $size[0], 'height' => $size[1]];
+    }
+
+    /**
+     * Delete an upload and all of its sizes. Bundled images under public/assets are left alone.
+     */
+    public function delete(?string $path): void
+    {
+        if (! self::isUpload($path)) {
+            return;
+        }
+
+        // Only a sized upload owns its folder; an older single-file upload shares it with others.
+        self::isSized($path)
+            ? $this->disk()->deleteDirectory(dirname($path))
+            : $this->disk()->delete($path);
+    }
+
+    /**
+     * Paths of every size of an upload, keyed by size name (including "original").
+     *
+     * @return array<string, string>
+     */
+    public static function paths(string $path, string $type): array
+    {
+        if (! self::isSized($path)) {
+            return array_fill_keys(['original', ...array_keys(self::sizes($type))], $path);
+        }
+
+        $directory = dirname($path);
+        $paths = ['original' => $path];
+
+        foreach (self::sizes($type) as $size => $dimensions) {
+            $paths[$size] = "{$directory}/{$size}.".self::extension($dimensions);
+        }
+
+        return $paths;
+    }
+
+    /**
+     * Whether a stored path is an upload (rather than an image bundled under public/assets).
+     */
+    public static function isUpload(?string $path): bool
+    {
+        return filled($path) && ! str_starts_with($path, 'assets/');
+    }
+
+    /**
+     * Whether a path is the original.webp of a folder of sizes written by this class.
+     */
+    public static function isSized(string $path): bool
+    {
+        return basename($path) === 'original.webp' && substr_count($path, '/') === 2;
+    }
+
+    /**
+     * @return array<string, array{0: int, 1: int, 2?: 'contain'|'cover', 3?: 'webp'|'jpg'}>
+     */
+    public static function sizes(string $type): array
+    {
+        $sizes = config("images.sizes.{$type}");
+
+        if (! is_array($sizes)) {
+            throw new InvalidArgumentException("No image sizes are configured for [{$type}].");
+        }
+
+        return $sizes;
+    }
+
+    /**
+     * @param  array{0: int, 1: int, 2?: 'contain'|'cover', 3?: 'webp'|'jpg'}  $dimensions
+     */
+    private static function extension(array $dimensions): string
+    {
+        return $dimensions[3] ?? 'webp';
+    }
+
+    private function writeSizes(ImageInterface $image, string $directory, string $type, bool $withOriginal = true): void
+    {
+        $quality = (int) config('images.quality', 80);
+
+        if ($withOriginal) {
+            $this->disk()->put(
+                "{$directory}/original.webp",
+                (string) (clone $image)->scaleDown(width: (int) config('images.max_width', 1920))->toWebp($quality),
+            );
+        }
+
+        foreach (self::sizes($type) as $size => $dimensions) {
+            [$width, $height] = $dimensions;
+            $resized = ($dimensions[2] ?? 'cover') === 'contain'
+                ? (clone $image)->scaleDown($width, $height)
+                : (clone $image)->cover($width, $height, self::coverPosition($image, $width, $height));
+
+            $encoded = self::extension($dimensions) === 'jpg'
+                ? $resized->toJpeg($quality)
+                : $resized->toWebp($quality);
+
+            $this->disk()->put("{$directory}/{$size}.".self::extension($dimensions), (string) $encoded);
+        }
+    }
+
+    /**
+     * Where to crop when filling a size. A photo taller than the size keeps its top, since
+     * people's heads are near the top of portrait photos; anything else is cropped around the centre.
+     */
+    private static function coverPosition(ImageInterface $image, int $width, int $height): string
+    {
+        return $image->height() / $image->width() > $height / $width ? 'top' : 'center';
+    }
+
+    private function manager(): ImageManager
+    {
+        return config('images.driver') === 'imagick' ? ImageManager::imagick() : ImageManager::gd();
+    }
+
+    private function disk(): Filesystem
+    {
+        return Storage::disk((string) config('images.disk', 'public'));
+    }
+}

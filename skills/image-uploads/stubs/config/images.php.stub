@@ -1,0 +1,53 @@
+<?php
+
+/*
+|--------------------------------------------------------------------------
+| Uploaded image sizes
+|--------------------------------------------------------------------------
+|
+| Every upload is saved in a folder of its own: an "original" WebP scaled down
+| to at most `max_width`, plus one file per size below. Sizes are cropped to
+| fill the box ('cover', the default), or scaled to fit inside it ('contain',
+| for logos that must never be cut off). Sizes marked 'jpg' are saved as JPEG:
+| link previews on WhatsApp and Facebook don't reliably show WebP.
+|
+| After changing sizes, run `php artisan images:regenerate`.
+|
+*/
+
+return [
+
+    'disk' => env('IMAGES_DISK', 'public'),
+
+    // "gd" works everywhere; "imagick" is faster and keeps colour profiles when installed.
+    'driver' => env('IMAGES_DRIVER', 'gd'),
+
+    'quality' => 80,
+
+    'max_width' => 1920,
+
+    'sizes' => [
+        'posts' => [
+            'card' => [400, 532],
+            'detail' => [1024, 683],
+            'share' => [1200, 630, 'cover', 'jpg'],
+            'thumb' => [80, 80],
+        ],
+        'avatars' => [
+            'card' => [500, 500],
+            'thumb' => [80, 80],
+        ],
+        'logos' => [
+            'logo' => [334, 102, 'contain'],
+        ],
+    ],
+
+    /*
+    | Models whose images `images:regenerate` rebuilds: class => [column, size type].
+    | Add every model that stores an upload, or it will be skipped after a size change.
+    */
+    'models' => [
+        // App\Models\Post::class => ['image', 'posts'],
+    ],
+
+];

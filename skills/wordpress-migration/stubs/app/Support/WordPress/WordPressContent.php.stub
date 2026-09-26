@@ -1,0 +1,46 @@
+<?php
+
+namespace App\Support\WordPress;
+
+/**
+ * Turns WordPress post content into plain HTML a Laravel app can store and render:
+ * Gutenberg block comments and shortcodes removed, and classic-editor posts (saved
+ * without <p> tags; WordPress adds them only when displaying) given their paragraphs.
+ */
+class WordPressContent
+{
+    private const BLOCK_TAGS = 'p|div|h[1-6]|ul|ol|li|blockquote|figure|table|pre|section|article|hr';
+
+    public static function clean(string $html): string
+    {
+        // Gutenberg block delimiters: <!-- wp:paragraph {...} --> and <!-- /wp:paragraph -->.
+        $html = (string) preg_replace('/<!--\s*\/?wp:.*?-->/s', '', $html);
+
+        // Captions keep their image and text; every other shortcode is removed.
+        $html = (string) preg_replace('/\[caption[^\]]*\](.*?)\[\/caption\]/s', '$1', $html);
+        $html = (string) preg_replace('/\[\/?[a-z][a-z0-9_-]*(?:\s[^\]]*)?\]/i', '', $html);
+
+        $html = trim(str_replace(["\r\n", "\r"], "\n", $html));
+
+        if (! preg_match('/<('.self::BLOCK_TAGS.')\b/i', $html)) {
+            $html = self::paragraphs($html);
+        }
+
+        // Empty paragraphs left behind by removed shortcodes or the editor.
+        $html = (string) preg_replace('/<p>(?:\s|&nbsp;|\x{00A0}|<br\s*\/?>)*<\/p>/u', '', $html);
+
+        return trim((string) preg_replace("/\n{3,}/", "\n\n", $html));
+    }
+
+    /**
+     * WordPress's wpautop, simplified: blank lines separate paragraphs, single line breaks become <br>.
+     */
+    public static function paragraphs(string $text): string
+    {
+        return collect(preg_split('/\n\s*\n/', trim($text)) ?: [])
+            ->map(fn (string $paragraph) => trim($paragraph))
+            ->filter()
+            ->map(fn (string $paragraph) => '<p>'.str_replace("\n", "<br>\n", $paragraph).'</p>')
+            ->implode("\n");
+    }
+}

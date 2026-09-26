@@ -1,0 +1,28 @@
+<?php
+
+namespace App\Http\Controllers\Concerns;
+
+/**
+ * Rows per page for admin tables: whatever the admin picked in the table footer, when it is
+ * one of the offered options, or the default. Anything else (per_page=5000) is ignored.
+ *
+ *   Model::query()->latest()->paginate($this->perPage())->withQueryString()
+ */
+trait PaginatesTables
+{
+    /**
+     * Must match PER_PAGE_OPTIONS in resources/js/components/data-pagination.tsx.
+     *
+     * @var list<int>
+     */
+    protected const PER_PAGE_OPTIONS = [10, 25, 50, 100];
+
+    protected const DEFAULT_PER_PAGE = 25;
+
+    protected function perPage(): int
+    {
+        $perPage = request()->integer('per_page');
+
+        return in_array($perPage, self::PER_PAGE_OPTIONS, true) ? $perPage : self::DEFAULT_PER_PAGE;
+    }
+}

@@ -1,0 +1,99 @@
+<?php
+
+use App\Support\SpamSignals;
+use App\Support\WordPress\WordPressContent;
+use App\Support\WordPress\WordPressDump;
+
+function wordPressFixture(string $name = 'wordpress-dump.sql'): string
+{
+    return base_path('tests/Fixtures/'.$name);
+}
+
+test('the dump reader returns rows with escapes, commas and line breaks intact', function () {
+    $post = collect((new WordPressDump(wordPressFixture()))->rows('wp_posts'))->firstWhere('ID', 10);
+
+    expect($post['post_content'])->toContain("a quote ' and\na new line")
+        ->and($post['post_title'])->toBe('Hello &amp; welcome')
+        ->and($post['post_author'])->toBe(1);
+});
+
+test('mysqldump files without column lists are read using CREATE TABLE', function () {
+    $rows = collect((new WordPressDump(wordPressFixture('wordpress-mysqldump.sql')))->rows('wp_posts'));
+
+    expect($rows->all())->toBe([
+        ['ID' => 1, 'post_title' => 'One, with a comma', 'post_status' => 'publish'],
+        ['ID' => 2, 'post_title' => 'Two "quoted"', 'post_status' => 'draft'],
+    ]);
+});
+
+test('published posts are exported with clean HTML, terms, author and featured image', function () {
+    $output = 'storage/app/testing/wordpress-posts.json';
+
+    $this->artisan('wordpress:export-posts', ['dump' => wordPressFixture(), '--output' => $output, '--timezone' => 'Africa/Nairobi'])
+        ->expectsOutputToContain('Exported 2 post(s)')
+        ->assertSuccessful();
+
+    $posts = json_decode(file_get_contents(base_path($output)), true);
+
+    expect(array_column($posts, 'slug'))->toBe(['classic-post', 'hello-world'])
+        ->and($posts[1])->toMatchArray([
+            'title' => 'Hello & welcome',
+            'html' => "<p>Hello, world. It's a comma, a quote ' and\na new line.</p>",
+            'published_at' => '2023-05-01T10:00:00+00:00',
+            'author' => 'Jane Doe',
+            'categories' => ['Stories'],
+            'tags' => ['hope'],
+            'featured_image' => 'https://old.example.org/wp-content/uploads/2023/05/hello.jpg',
+        ])
+        ->and($posts[0])->toMatchArray([
+            'excerpt' => 'A short summary',
+            'categories' => ['News & Updates'],
+            'featured_image' => null,
+            // No GMT date, so the local date is read in the old site's timezone (UTC+3).
+            'published_at' => '2022-01-01T06:00:00+00:00',
+        ]);
+
+    unlink(base_path($output));
+});
+
+test('pages can be exported too', function () {
+    $output = 'storage/app/testing/wordpress-pages.json';
+
+    $this->artisan('wordpress:export-posts', ['dump' => wordPressFixture(), '--output' => $output, '--type' => 'page'])->assertSuccessful();
+
+    expect(array_column(json_decode(file_get_contents(base_path($output)), true), 'title'))->toBe(['About']);
+
+    unlink(base_path($output));
+});
+
+test('a missing dump fails with a message', function () {
+    $this->artisan('wordpress:export-posts', ['dump' => '/nowhere/dump.sql'])
+        ->expectsOutputToContain('Could not open the SQL dump')
+        ->assertFailed();
+});
+
+test('classic editor content gets paragraphs, and shortcodes are removed', function () {
+    $html = WordPressContent::clean("First line\nsecond line\n\n[caption id=\"a\"]<img src=\"a.jpg\" /> A caption[/caption]\n\n[contact-form-7 id=\"5\"]");
+
+    expect($html)->toBe("<p>First line<br>\nsecond line</p>\n<p><img src=\"a.jpg\" /> A caption</p>");
+});
+
+test('Gutenberg block comments and empty paragraphs are removed', function () {
+    $html = WordPressContent::clean("<!-- wp:paragraph -->\n<p>Hi</p>\n<!-- /wp:paragraph -->\n\n<!-- wp:paragraph -->\n<p>&nbsp;</p>\n<!-- /wp:paragraph -->");
+
+    expect($html)->toBe('<p>Hi</p>');
+});
+
+test('bot and attack entries are spotted, real people are not', function (string $first, string $last, string $email, bool $fake) {
+    $floods = SpamSignals::plusAddressCounts(['flood+1@outlook.com', 'flood+2@outlook.com', 'flood+3@outlook.com']);
+
+    expect(SpamSignals::looksFake($first, $last, $email, $floods))->toBe($fake);
+})->with([
+    'serialized PHP object' => ['Attacker', 'O:5:"TCPDF":2:{}', 'a1@site.test', true],
+    'throwaway inbox' => ['Probe', 'User', 'probe123@mailinator.com', true],
+    'random letters' => ['ydgqRXICtAYVnaFApXLlYU', 'EfpAJBF', 'random1@gmail.com', true],
+    'plus-address flood' => ['Flood', 'Bot', 'flood+2@outlook.com', true],
+    'same first and last name' => ['Test', 'test', 'someone@gmail.com', true],
+    'real person' => ['Amina', 'Otieno', 'amina.otieno@gmail.com', false],
+    'real Mc name' => ['DeShawn', 'McDaniel', 'dmcdaniel@yahoo.com', false],
+]);

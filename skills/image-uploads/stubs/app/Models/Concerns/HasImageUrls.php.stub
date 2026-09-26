@@ -1,0 +1,55 @@
+<?php
+
+namespace App\Models\Concerns;
+
+use App\Support\ImageUploader;
+use Illuminate\Support\Facades\Storage;
+
+/**
+ * Turns stored image paths into URLs, e.g. in a model:
+ *
+ *   protected function imageUrls(): Attribute
+ *   {
+ *       return Attribute::get(fn () => $this->resolveImageUrls($this->image, 'posts'));
+ *   }
+ *
+ * Then $post->image_urls['card'], $post->image_urls['share'] and so on.
+ */
+trait HasImageUrls
+{
+    /**
+     * Paths under "assets/" are images bundled in public/; anything else is an upload on the images disk.
+     */
+    protected function resolveImageUrl(?string $path): ?string
+    {
+        if (blank($path)) {
+            return null;
+        }
+
+        return ImageUploader::isUpload($path)
+            ? Storage::disk((string) config('images.disk', 'public'))->url($path)
+            : asset($path);
+    }
+
+    /**
+     * URLs for every configured size of an image, keyed by size name. Bundled images only
+     * exist at one size, so every key points at that file.
+     *
+     * @return array<string, string>|null
+     */
+    protected function resolveImageUrls(?string $path, string $type): ?array
+    {
+        if (blank($path)) {
+            return null;
+        }
+
+        if (! ImageUploader::isUpload($path)) {
+            return array_fill_keys(['original', ...array_keys(ImageUploader::sizes($type))], asset($path));
+        }
+
+        return array_map(
+            fn (string $sizePath): ?string => $this->resolveImageUrl($sizePath),
+            ImageUploader::paths($path, $type),
+        );
+    }
+}

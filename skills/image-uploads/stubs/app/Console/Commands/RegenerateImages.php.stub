@@ -1,0 +1,53 @@
+<?php
+
+namespace App\Console\Commands;
+
+use App\Support\ImageUploader;
+use Illuminate\Console\Command;
+use Illuminate\Database\Eloquent\Model;
+use Throwable;
+
+class RegenerateImages extends Command
+{
+    protected $signature = 'images:regenerate';
+
+    protected $description = 'Rebuild every size of the uploaded images after changing config/images.php';
+
+    public function handle(ImageUploader $uploader): int
+    {
+        /** @var array<class-string<Model>, array{string, string}> $models */
+        $models = config('images.models', []);
+
+        if ($models === []) {
+            $this->components->warn('No models are listed in config/images.php under "models", so nothing was resized.');
+
+            return self::SUCCESS;
+        }
+
+        $failed = 0;
+
+        foreach ($models as $model => [$column, $type]) {
+            $records = $model::query()->whereNotNull($column)->get()
+                ->filter(fn (Model $record): bool => ImageUploader::isUpload($record->getAttribute($column)));
+
+            $this->components->info("Resizing {$records->count()} {$type} image(s).");
+
+            foreach ($records as $record) {
+                $path = $record->getAttribute($column);
+
+                try {
+                    $newPath = $uploader->regenerate($path, $type);
+
+                    if ($newPath !== $path) {
+                        $record->forceFill([$column => $newPath])->saveQuietly();
+                    }
+                } catch (Throwable $e) {
+                    $failed++;
+                    $this->components->error("{$path}: {$e->getMessage()}");
+                }
+            }
+        }
+
+        return $failed === 0 ? self::SUCCESS : self::FAILURE;
+    }
+}
