@@ -10,6 +10,11 @@ metadata:
 
 One command, `composer check:push`, runs everything that must pass before code leaves your machine. A git `pre-push` hook runs it automatically, and CI runs the identical command, so "works on my machine" and "CI is red" stop disagreeing.
 
+## Agent safety
+
+- **Ask the user before enabling the hook.** `composer hooks:install` changes only this repository's git config (`core.hooksPath=.githooks`). Nothing system-wide, global or outside the project is touched.
+- The hook runs the project's own scripts (`composer check:push`) and nothing downloaded at runtime.
+
 ## Install
 
 1. Copy `stubs/.githooks/pre-push.stub` to `.githooks/pre-push` and make it executable: `chmod +x .githooks/pre-push`.
@@ -44,7 +49,7 @@ One command, `composer check:push`, runs everything that must pass before code l
 ## Rules
 
 - **Hooks live in the repo** (`.githooks/`, via `core.hooksPath`), not in `.git/hooks`, which isn't versioned or shared.
-- **`git push --no-verify` is for emergencies only.** CI runs the same command, so skipping locally only delays the failure.
+- **Don't skip the hook to get a push through.** Fix the failing check. CI runs the same command, so skipping it only moves the failure.
 - **Keep the hook tiny.** It calls `composer check:push` and nothing else, so CI, the hook and developers all run the same list.
 - **Pin GitHub Actions to commit SHAs** in production repos and let Dependabot update them. A moved tag can run someone else's code with your repo's permissions.
 - Set `persist-credentials: false` on checkout unless a later step needs to push.

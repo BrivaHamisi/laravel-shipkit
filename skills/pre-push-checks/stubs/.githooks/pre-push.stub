@@ -2,7 +2,7 @@
 # Runs every check before code reaches the remote: production build, secrets scan, formatting,
 # static analysis and the test suite (see `composer check:push`).
 # Installed by `composer hooks:install` (git config core.hooksPath .githooks).
-# In an emergency, `git push --no-verify` skips it; CI still runs the same checks.
+# CI runs the same checks, so a failure here would fail there too.
 
 echo "Running pre-push checks (composer check:push)..."
 

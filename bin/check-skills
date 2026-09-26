@@ -7,6 +7,8 @@
  * - No bare .php files: Boost refuses to download them, so code must ship as .php.stub.
  * - shipkit.json, if present, is valid JSON.
  * - Files shared between skills (the payments model) are identical to .shared/.
+ * - Nothing the skills.sh security audits flag: @latest installs, curl | sh, skipped hooks,
+ *   unpinned GitHub Actions, hidden Unicode.
  */
 $root = dirname(__DIR__);
 $errors = [];
@@ -47,6 +49,31 @@ foreach (glob("{$root}/skills/*", GLOB_ONLYDIR) as $dir) {
     foreach ($files as $file) {
         if (preg_match('/\.(php\d?|phar|phtml)$/i', $file->getFilename())) {
             $errors[] = "{$name}: ".substr($file->getPathname(), strlen($dir) + 1).' must end in .stub, or boost:add-skill will skip it';
+        }
+    }
+
+    // Patterns the skills.sh audits (Snyk, Gen Agent Trust Hub, Socket) flag in skills.
+    foreach ($files as $file) {
+        $path = substr($file->getPathname(), strlen($dir) + 1);
+        $contents = file_get_contents($file->getPathname());
+
+        foreach ([
+            '/@latest\b/' => 'installs an unpinned @latest package (Snyk W012)',
+            '/\b(?:curl|wget)\b[^\n|]*\|\s*(?:ba|z)?sh\b/' => 'pipes a download into a shell (Snyk W012)',
+            '/--no-verify/' => 'suggests skipping git hooks',
+            '/[\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2064}\x{FEFF}\x{E0000}-\x{E007F}\x{00A0}]/u' => 'contains hidden or invisible Unicode (Snyk W021)',
+        ] as $pattern => $problem) {
+            if (preg_match($pattern, $contents)) {
+                $errors[] = "{$name}: {$path} {$problem}";
+            }
+        }
+
+        if (preg_match_all('/^\s*-?\s*uses:\s*([^\s#]+)/m', $contents, $uses)) {
+            foreach ($uses[1] as $action) {
+                if (! preg_match('/@[0-9a-f]{40}$/', $action)) {
+                    $errors[] = "{$name}: {$path} uses {$action}; pin GitHub Actions to a full commit SHA";
+                }
+            }
         }
     }
 

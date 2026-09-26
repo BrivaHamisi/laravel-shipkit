@@ -29,7 +29,7 @@ All files are in `stubs/`. Copy each into the app at the same path, **dropping t
 1. Copy the stubs. If `app/Models/Payment.php` already exists from `paypal-checkout`, keep the existing one (they're identical).
 2. Add `require __DIR__.'/mpesa.php';` to the end of `routes/web.php`.
 3. Run `php artisan migrate`.
-4. Add to `.env` (and empty keys to `.env.example`):
+4. Add these keys **with empty values** to `.env.example`. The owner fills in their own `.env`:
    ```dotenv
    MPESA_ENVIRONMENT=sandbox
    MPESA_CONSUMER_KEY=
@@ -39,9 +39,15 @@ All files are in `stubs/`. Copy each into the app at the same path, **dropping t
    MPESA_TYPE=paybill
    MPESA_CALLBACK_TOKEN=
    ```
-   Sandbox keys come from an app at developer.safaricom.co.ke. The sandbox short code is `174379`; its passkey is on the Daraja STK push simulator page. Generate the callback token with `php -r "echo bin2hex(random_bytes(20));"`.
+   The owner gets sandbox keys from their own app at developer.safaricom.co.ke (the sandbox short code is `174379`, and the sandbox passkey is on the Daraja STK push simulator page). The owner generates the callback token locally with `php -r "echo bin2hex(random_bytes(20));"`.
 5. Run `php artisan test --filter=Mpesa`.
 6. Build the checkout UI with `payWithMpesa()` from `resources/js/mpesa-checkout.js`, or post to `route('mpesa.store')` and poll the returned `status_url` every 4 seconds.
+
+## Agent safety
+
+- This skill writes integration code and tests. **Never start a real payment or call the live API yourself**: the tests use `Http::fake()`, and real M-Pesa prompts only happen when a customer pays in the running app, in sandbox until the owner switches to live.
+- **Never ask the user to paste keys into the chat, and never write key values into any file.** Add the variable names with empty values to `.env.example`; the owner sets the real values in their own `.env` or the host's environment settings.
+- Don't read, print or copy the contents of `.env`.
 
 ## Rules that matter
 
@@ -66,7 +72,7 @@ All files are in `stubs/`. Copy each into the app at the same path, **dropping t
 
 ## Testing a real prompt locally
 
-Safaricom must reach your callback over public HTTPS. Run a tunnel (`ngrok http 80`, `expose share`) and set `MPESA_CALLBACK_URL=https://<tunnel>/mpesa/callback/<token>`. Without it, the status-query fallback still completes payments after about 20 seconds.
+This is for the developer to do by hand, with their own sandbox keys and phone. Safaricom must reach the callback over public HTTPS, so the developer can expose their local site through a tunnel service they already use and set `MPESA_CALLBACK_URL` to `https://<tunnel-host>/mpesa/callback/<token>`. Without a tunnel, the status-query fallback still completes sandbox payments after about 20 seconds.
 
 ## Going live
 
@@ -74,7 +80,7 @@ Safaricom must reach your callback over public HTTPS. Run a tunnel (`ngrok http 
 2. On the Daraja portal, create a production app and use **Go Live** to link your short code. The live passkey arrives by email.
 3. Set `MPESA_ENVIRONMENT=live`, plus the live key, secret, short code, passkey and `MPESA_TYPE`.
 4. Make sure the callback URL is public HTTPS and not behind basic auth or a login.
-5. Send yourself a small real payment, then check that the callback marked it completed with a receipt number.
+5. The owner makes one small real payment themselves and checks that the callback marked it completed with a receipt number.
 
 ## Rate limits
 

@@ -28,18 +28,24 @@ Copy each file in `stubs/` to the same path in the app, **dropping the `.stub` s
 
 1. Copy the stubs. If `app/Models/Payment.php` already exists from `mpesa-stk-push`, keep it.
 2. Add `require __DIR__.'/paypal.php';` to `routes/web.php`, then run `php artisan migrate`.
-3. Add to `.env`:
+3. Add these keys **with empty values** to `.env.example`. The owner fills in their own `.env`:
    ```dotenv
    PAYPAL_MODE=sandbox
    PAYPAL_CLIENT_ID=
    PAYPAL_CLIENT_SECRET=
    PAYPAL_CURRENCY=USD
    ```
-   Create the app at developer.paypal.com → Apps & Credentials. Sandbox and live have **different** credentials.
+   The owner creates the app at developer.paypal.com → Apps & Credentials. Sandbox and live have **different** credentials.
 4. Load the SDK on the checkout page with **only the client ID**:
    `https://www.paypal.com/sdk/js?client-id=...&currency=USD&intent=capture&components=buttons`
 5. Call `renderPayPalButtons('#paypal-buttons', () => ({ amount }), onResult)`.
 6. Run `php artisan test --filter=PayPal`.
+
+## Agent safety
+
+- This skill writes integration code and tests. **Never start a real payment or call the live API yourself**: the tests use `Http::fake()`, and real charges only happen when a customer pays in the running app, in sandbox until the owner switches to live.
+- **Never ask the user to paste keys into the chat, and never write key values into any file.** Add the variable names with empty values to `.env.example`; the owner sets the real values in their own `.env` or the host's environment settings.
+- Don't read, print or copy the contents of `.env`.
 
 ## Rules that matter
 
@@ -54,5 +60,5 @@ Copy each file in `stubs/` to the same path in the app, **dropping the `.stub` s
 
 1. Create a **live** app in the PayPal dashboard. It needs a verified business account.
 2. Set `PAYPAL_MODE=live` with the live client ID and secret. The client picks `api-m.paypal.com` automatically.
-3. Make a small real payment and refund it from the PayPal dashboard.
-4. Rotate the credentials if they were ever pasted into chat, email or a commit. The `secrets-scanner` skill catches committed ones.
+3. The owner makes one small real payment themselves and refunds it from the PayPal dashboard.
+4. The owner rotates the credentials if they were ever pasted into chat, email or a commit. The `secrets-scanner` skill catches committed ones.

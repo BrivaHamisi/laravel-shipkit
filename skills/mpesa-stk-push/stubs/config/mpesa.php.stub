@@ -31,7 +31,7 @@ return [
     // Generate one with: php -r "echo bin2hex(random_bytes(20));"
     'callback_token' => env('MPESA_CALLBACK_TOKEN'),
 
-    // Optional public URL override, e.g. an ngrok or Expose tunnel while testing locally.
+    // Optional public URL override, e.g. a tunnel to a local site while testing in the sandbox.
     'callback_url' => env('MPESA_CALLBACK_URL'),
 
     // Shown on the customer's phone and statement. Daraja allows 12 and 13 characters.

@@ -20,6 +20,12 @@ It also fails if any `.env` file other than `.env.example` is tracked by git.
 
 Findings show the file, line, kind, and a **masked** value (`sk_l...(40 chars)`), so CI logs never repeat the secret.
 
+## Agent safety
+
+- The command runs **locally and offline**. It reads files only to detect secrets, never sends anything over the network, and prints only a masked hint (`sk_l...(40 chars)`).
+- When it reports a finding, **don't open the file to show the user the value**, and don't copy it anywhere. Tell the user the file, line and kind, and let them rotate the credential.
+- Never add a real secret to `KNOWN_PUBLIC_VALUES` to silence a finding. That list is only for values the provider itself publishes, such as documented sandbox keys.
+
 ## Install
 
 1. Copy `stubs/app/Console/Commands/ScanSecrets.php.stub` to `app/Console/Commands/ScanSecrets.php`, and the test to `tests/Feature/ScanSecretsTest.php`.

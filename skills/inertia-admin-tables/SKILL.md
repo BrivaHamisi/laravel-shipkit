@@ -21,7 +21,7 @@ Server: `->paginate($this->perPage())->withQueryString()`. Client: `<DataPaginat
    - `resources/js/components/data-pagination.tsx`
    - `resources/js/types/paginated.ts`
    - `tests/Feature/PaginatesTablesTest.php`
-2. The component needs the shadcn/ui `button`, `pagination` and `select` components: `npx shadcn@latest add button pagination select`.
+2. The component needs the shadcn/ui `button`, `pagination` and `select` components. If the project doesn't have them yet, add them with the project's existing shadcn setup (`components.json`), or ask the user to.
 3. In each admin controller:
    ```php
    use App\Http\Controllers\Concerns\PaginatesTables;
