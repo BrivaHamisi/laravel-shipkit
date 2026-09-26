@@ -1,0 +1,147 @@
+<?php
+
+namespace App\Support\Payments;
+
+use App\Models\Payment;
+use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\RequestException;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
+
+/**
+ * PayPal Orders v2: the server creates each order at the payment's amount and captures
+ * it after the customer approves in PayPal's pop-up, so the amount can't be changed in the browser.
+ */
+class PayPal
+{
+    public function isConfigured(): bool
+    {
+        return filled(config('paypal.client_id')) && filled(config('paypal.client_secret'));
+    }
+
+    /**
+     * The client ID is public: the JavaScript SDK needs it. The secret never leaves the server.
+     */
+    public function clientId(): ?string
+    {
+        return config('paypal.client_id');
+    }
+
+    /**
+     * Create an order for a pending payment and return PayPal's order ID.
+     *
+     * @throws RequestException
+     */
+    public function createOrder(Payment $payment, ?string $description = null): string
+    {
+        $response = $this->request()
+            // Makes a retried request return the same order instead of creating a second one.
+            ->withHeaders(['PayPal-Request-Id' => $payment->reference])
+            ->post('/v2/checkout/orders', [
+                'intent' => 'CAPTURE',
+                'purchase_units' => [[
+                    'reference_id' => $payment->reference,
+                    'custom_id' => $payment->reference,
+                    'description' => $description ?? 'Payment to '.config('app.name'),
+                    'amount' => [
+                        'currency_code' => $payment->currency,
+                        'value' => number_format((float) $payment->amount, 2, '.', ''),
+                    ],
+                ]],
+                'payment_source' => [
+                    'paypal' => [
+                        'experience_context' => [
+                            'brand_name' => config('app.name'),
+                            'shipping_preference' => 'NO_SHIPPING',
+                            'user_action' => 'PAY_NOW',
+                        ],
+                    ],
+                ],
+            ])
+            ->throw();
+
+        return (string) $response->json('id');
+    }
+
+    /**
+     * Capture an approved order. An order captured already (e.g. a retried request)
+     * returns its current details instead of failing.
+     *
+     * @return array<string, mixed>
+     *
+     * @throws RequestException
+     */
+    public function captureOrder(string $orderId): array
+    {
+        $response = $this->request()
+            ->withBody('{}', 'application/json')
+            ->post('/v2/checkout/orders/'.rawurlencode($orderId).'/capture');
+
+        if ($response->status() === 422 && $response->json('details.0.issue') === 'ORDER_ALREADY_CAPTURED') {
+            return $this->order($orderId);
+        }
+
+        return $response->throw()->json();
+    }
+
+    /**
+     * @return array<string, mixed>
+     *
+     * @throws RequestException
+     */
+    public function order(string $orderId): array
+    {
+        return $this->request()->get('/v2/checkout/orders/'.rawurlencode($orderId))->throw()->json();
+    }
+
+    /**
+     * Whether a capture response shows the full amount, in the right currency, was paid.
+     *
+     * @param  array<string, mixed>  $order
+     */
+    public static function paidInFull(array $order, Payment $payment): bool
+    {
+        $capture = (array) data_get($order, 'purchase_units.0.payments.captures.0', []);
+
+        return data_get($capture, 'status') === 'COMPLETED'
+            && data_get($capture, 'amount.currency_code') === $payment->currency
+            && round((float) data_get($capture, 'amount.value'), 2) === round((float) $payment->amount, 2);
+    }
+
+    private function request(): PendingRequest
+    {
+        return Http::baseUrl($this->baseUrl())
+            ->withToken($this->accessToken())
+            ->acceptJson()
+            ->asJson()
+            ->timeout(30);
+    }
+
+    private function accessToken(): string
+    {
+        $cacheKey = 'paypal.access_token.'.config('paypal.mode');
+
+        if ($token = Cache::get($cacheKey)) {
+            return $token;
+        }
+
+        $response = Http::baseUrl($this->baseUrl())
+            ->withBasicAuth((string) config('paypal.client_id'), (string) config('paypal.client_secret'))
+            ->asForm()
+            ->timeout(30)
+            ->post('/v1/oauth2/token', ['grant_type' => 'client_credentials'])
+            ->throw();
+
+        $token = (string) $response->json('access_token');
+        Cache::put($cacheKey, $token, max(60, (int) $response->json('expires_in', 3600) - 120));
+
+        return $token;
+    }
+
+    private function baseUrl(): string
+    {
+        return config('paypal.mode') === 'live'
+            ? 'https://api-m.paypal.com'
+            : 'https://api-m.sandbox.paypal.com';
+    }
+}

@@ -1,0 +1,45 @@
+<?php
+
+/*
+|--------------------------------------------------------------------------
+| M-Pesa (Safaricom Daraja) STK push
+|--------------------------------------------------------------------------
+|
+| Sandbox keys come from an app at developer.safaricom.co.ke. Going live needs
+| a Paybill or Till, a "Go Live" request on the Daraja portal, and the live
+| passkey Safaricom emails you. Keep every value in .env, never in code.
+|
+*/
+
+return [
+
+    // "sandbox" or "live".
+    'environment' => env('MPESA_ENVIRONMENT', 'sandbox'),
+
+    'consumer_key' => env('MPESA_CONSUMER_KEY'),
+    'consumer_secret' => env('MPESA_CONSUMER_SECRET'),
+
+    // The Paybill or Till business short code, and its Lipa Na M-Pesa Online passkey.
+    'shortcode' => env('MPESA_SHORTCODE'),
+    'passkey' => env('MPESA_PASSKEY'),
+
+    // "paybill" or "till". A Till needs its till number, which is not the same as the store short code.
+    'type' => env('MPESA_TYPE', 'paybill'),
+    'till_number' => env('MPESA_TILL_NUMBER'),
+
+    // Secret part of the callback URL, so only Safaricom (who is given the URL) can report results.
+    // Generate one with: php -r "echo bin2hex(random_bytes(20));"
+    'callback_token' => env('MPESA_CALLBACK_TOKEN'),
+
+    // Optional public URL override, e.g. an ngrok or Expose tunnel while testing locally.
+    'callback_url' => env('MPESA_CALLBACK_URL'),
+
+    // Shown on the customer's phone and statement. Daraja allows 12 and 13 characters.
+    'account_reference' => env('MPESA_ACCOUNT_REFERENCE', 'Payment'),
+    'description' => env('MPESA_DESCRIPTION', 'Payment'),
+
+    // Safaricom's per-transaction limits in KES. Check the current limits before going live.
+    'min_amount' => 1,
+    'max_amount' => 250000,
+
+];

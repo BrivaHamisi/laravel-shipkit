@@ -1,0 +1,15 @@
+<?php
+
+use App\Http\Controllers\MpesaPaymentController;
+use Illuminate\Foundation\Http\Middleware\ValidateCsrfToken;
+use Illuminate\Support\Facades\Route;
+
+Route::controller(MpesaPaymentController::class)->name('mpesa.')->group(function () {
+    Route::post('payments/mpesa', 'store')->middleware('throttle:10,1')->name('store');
+    Route::get('payments/mpesa/{payment:reference}', 'status')->middleware('throttle:120,1')->name('status');
+    // Called by Safaricom's servers, so it can't carry a CSRF token. The secret token in the URL protects it.
+    Route::post('mpesa/callback/{token}', 'callback')
+        ->withoutMiddleware(ValidateCsrfToken::class)
+        ->middleware('throttle:600,1')
+        ->name('callback');
+});

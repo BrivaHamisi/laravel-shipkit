@@ -1,0 +1,48 @@
+/**
+ * PayPal Smart Buttons wired to the server-side order flow.
+ *
+ * Load the SDK in your page (the client ID is public, the secret is not):
+ *   <script src="https://www.paypal.com/sdk/js?client-id={{ urlencode(config('paypal.client_id')) }}&currency={{ config('paypal.currency') }}&intent=capture&components=buttons&enable-funding=card" defer></script>
+ *
+ * Then:
+ *   renderPayPalButtons('#paypal-buttons', () => ({ amount: 50 }), (result) => showStatus(result.message));
+ */
+export function renderPayPalButtons(container, getData, onResult = () => {}) {
+    const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '';
+    const post = (url, data = {}) =>
+        fetch(url, {
+            method: 'POST',
+            headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'X-CSRF-TOKEN': csrf },
+            credentials: 'same-origin',
+            body: JSON.stringify(data),
+        }).then(async (response) => ({ ok: response.ok, body: await response.json().catch(() => ({})) }));
+
+    return window.paypal
+        .Buttons({
+            style: { layout: 'vertical', shape: 'pill' },
+
+            createOrder: async () => {
+                const result = await post('/payments/paypal/orders', getData());
+
+                if (!result.ok) {
+                    onResult({ status: 'failed', message: result.body.message ?? 'Could not start PayPal.' });
+                    throw new Error('Order not created');
+                }
+
+                return result.body.id;
+            },
+
+            onApprove: async ({ orderID }) => {
+                const result = await post(`/payments/paypal/orders/${encodeURIComponent(orderID)}/capture`);
+                onResult(result.body);
+            },
+
+            onCancel: ({ orderID }) => {
+                post(`/payments/paypal/orders/${encodeURIComponent(orderID)}/cancel`);
+                onResult({ status: 'abandoned', message: 'You closed PayPal before paying.' });
+            },
+
+            onError: () => onResult({ status: 'failed', message: 'PayPal ran into a problem. Please try again.' }),
+        })
+        .render(container);
+}

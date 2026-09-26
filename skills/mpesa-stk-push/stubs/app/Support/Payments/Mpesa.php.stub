@@ -1,0 +1,190 @@
+<?php
+
+namespace App\Support\Payments;
+
+use App\Models\Payment;
+use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\RequestException;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
+use RuntimeException;
+
+/**
+ * Safaricom Daraja "Lipa Na M-Pesa Online" (STK push): sends a payment prompt to the
+ * customer's phone. Safaricom reports the result to the callback URL; the status query
+ * is a fallback for when the callback can't reach the app (local development, outages).
+ */
+class Mpesa
+{
+    /**
+     * The status query's error code while the customer hasn't responded yet.
+     */
+    private const STILL_PROCESSING = '500.001.1001';
+
+    public function isConfigured(): bool
+    {
+        return filled(config('mpesa.consumer_key'))
+            && filled(config('mpesa.consumer_secret'))
+            && filled(config('mpesa.shortcode'))
+            && filled(config('mpesa.passkey'))
+            && filled($this->callbackUrl());
+    }
+
+    /**
+     * Send the payment prompt and return Safaricom's CheckoutRequestID.
+     *
+     * @throws RequestException|RuntimeException
+     */
+    public function stkPush(Payment $payment): string
+    {
+        $timestamp = $this->timestamp();
+        $isTill = config('mpesa.type') === 'till';
+
+        $response = $this->request()->post('/mpesa/stkpush/v1/processrequest', [
+            'BusinessShortCode' => config('mpesa.shortcode'),
+            'Password' => $this->password($timestamp),
+            'Timestamp' => $timestamp,
+            'TransactionType' => $isTill ? 'CustomerBuyGoodsOnline' : 'CustomerPayBillOnline',
+            // M-Pesa only takes whole shillings.
+            'Amount' => (int) round((float) $payment->amount),
+            'PartyA' => $payment->phone,
+            'PartyB' => $isTill ? config('mpesa.till_number') : config('mpesa.shortcode'),
+            'PhoneNumber' => $payment->phone,
+            'CallBackURL' => $this->callbackUrl(),
+            'AccountReference' => Str::limit((string) config('mpesa.account_reference'), 12, ''),
+            'TransactionDesc' => Str::limit((string) config('mpesa.description'), 13, ''),
+        ])->throw();
+
+        if ((string) $response->json('ResponseCode') !== '0') {
+            throw new RuntimeException((string) ($response->json('ResponseDescription') ?? 'M-Pesa did not accept the request.'));
+        }
+
+        return (string) $response->json('CheckoutRequestID');
+    }
+
+    /**
+     * Ask Safaricom how a payment prompt ended. Null while the customer hasn't responded.
+     *
+     * @return array{code: int, description: string}|null
+     *
+     * @throws RequestException
+     */
+    public function query(string $checkoutRequestId): ?array
+    {
+        $timestamp = $this->timestamp();
+
+        $response = $this->request()->post('/mpesa/stkpushquery/v1/query', [
+            'BusinessShortCode' => config('mpesa.shortcode'),
+            'Password' => $this->password($timestamp),
+            'Timestamp' => $timestamp,
+            'CheckoutRequestID' => $checkoutRequestId,
+        ]);
+
+        if ($response->json('errorCode') === self::STILL_PROCESSING) {
+            return null;
+        }
+
+        $response->throw();
+
+        return [
+            'code' => (int) $response->json('ResultCode'),
+            'description' => (string) $response->json('ResultDesc'),
+        ];
+    }
+
+    public function callbackUrl(): ?string
+    {
+        if ($url = config('mpesa.callback_url')) {
+            return $url;
+        }
+
+        $token = config('mpesa.callback_token');
+
+        return $token ? route('mpesa.callback', $token) : null;
+    }
+
+    /**
+     * Turn a Kenyan mobile number (07..., 01..., +254..., 254...) into 2547XXXXXXXX form, or null if it isn't one.
+     */
+    public static function normalizePhone(string $phone): ?string
+    {
+        $digits = preg_replace('/\D+/', '', $phone) ?? '';
+
+        $digits = match (true) {
+            str_starts_with($digits, '254') => $digits,
+            str_starts_with($digits, '0') => '254'.substr($digits, 1),
+            default => '254'.$digits,
+        };
+
+        return preg_match('/^254(7|1)\d{8}$/', $digits) ? $digits : null;
+    }
+
+    /**
+     * What a Daraja result code means, in words a customer understands.
+     */
+    public static function describeResult(int $code, string $fallback = ''): string
+    {
+        return match ($code) {
+            0 => 'The payment was received.',
+            1 => 'The M-Pesa balance was not enough for this payment.',
+            1032 => 'You cancelled the M-Pesa prompt.',
+            1037 => 'The M-Pesa prompt timed out before a PIN was entered.',
+            2001 => 'The M-Pesa PIN entered was wrong.',
+            default => $fallback ?: 'M-Pesa did not complete the payment.',
+        };
+    }
+
+    private function request(): PendingRequest
+    {
+        return Http::baseUrl($this->baseUrl())
+            ->withToken($this->accessToken())
+            ->acceptJson()
+            ->asJson()
+            ->timeout(30);
+    }
+
+    /**
+     * Tokens last an hour; cache them so every prompt doesn't cost an extra round trip.
+     */
+    private function accessToken(): string
+    {
+        $cacheKey = 'mpesa.access_token.'.config('mpesa.environment');
+
+        if ($token = Cache::get($cacheKey)) {
+            return $token;
+        }
+
+        $response = Http::baseUrl($this->baseUrl())
+            ->withBasicAuth((string) config('mpesa.consumer_key'), (string) config('mpesa.consumer_secret'))
+            ->acceptJson()
+            ->timeout(30)
+            ->get('/oauth/v1/generate', ['grant_type' => 'client_credentials'])
+            ->throw();
+
+        $token = (string) $response->json('access_token');
+        Cache::put($cacheKey, $token, max(60, (int) $response->json('expires_in', 3599) - 120));
+
+        return $token;
+    }
+
+    private function password(string $timestamp): string
+    {
+        return base64_encode(config('mpesa.shortcode').config('mpesa.passkey').$timestamp);
+    }
+
+    /**
+     * Daraja expects the time in Kenya as YYYYMMDDHHmmss, whatever the app's timezone.
+     */
+    private function timestamp(): string
+    {
+        return now('Africa/Nairobi')->format('YmdHis');
+    }
+
+    private function baseUrl(): string
+    {
+        return config('mpesa.environment') === 'live'
+            ? 'https://api.safaricom.co.ke'
+            : 'https://sandbox.safaricom.co.ke';
+    }
+}

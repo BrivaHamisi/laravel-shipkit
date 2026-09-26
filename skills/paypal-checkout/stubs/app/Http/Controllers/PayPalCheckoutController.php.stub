@@ -1,0 +1,102 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Enums\PaymentStatus;
+use App\Models\Payment;
+use App\Support\Payments\PayPal;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Throwable;
+
+/**
+ * PayPal Smart Buttons backed by the server: the browser asks this controller to create
+ * the order, PayPal's pop-up collects approval, and this controller captures and verifies it.
+ */
+class PayPalCheckoutController extends Controller
+{
+    /**
+     * Create an order. The amount comes from the request here, which suits donations; for
+     * anything with a price, work it out on the server and never trust the browser.
+     */
+    public function create(Request $request, PayPal $paypal): JsonResponse
+    {
+        $validated = $request->validate([
+            'amount' => ['required', 'numeric', 'decimal:0,2', 'min:'.config('paypal.min_amount'), 'max:'.config('paypal.max_amount')],
+            'name' => ['nullable', 'string', 'max:100'],
+            'email' => ['nullable', 'string', 'email:rfc', 'max:255'],
+        ]);
+
+        if (! $paypal->isConfigured()) {
+            return response()->json(['message' => "PayPal isn't available right now. Please try another way to pay."], 503);
+        }
+
+        $payment = Payment::start('paypal', $validated['amount'], (string) config('paypal.currency'), [
+            'name' => $validated['name'] ?? null,
+            'email' => $validated['email'] ?? null,
+        ]);
+
+        try {
+            $payment->update(['provider_reference' => $paypal->createOrder($payment)]);
+        } catch (Throwable $exception) {
+            report($exception);
+            $payment->markFailed('Could not create the PayPal order: '.$exception->getMessage());
+
+            return response()->json(['message' => 'We could not reach PayPal. Please try again in a moment.'], 503);
+        }
+
+        return response()->json(['id' => $payment->provider_reference, 'reference' => $payment->reference]);
+    }
+
+    /**
+     * Capture an order the customer approved, and only count it if the full amount arrived.
+     */
+    public function capture(string $orderId, PayPal $paypal): JsonResponse
+    {
+        $payment = $this->payment($orderId);
+
+        if ($payment->status !== PaymentStatus::Completed) {
+            try {
+                $order = $paypal->captureOrder($orderId);
+            } catch (Throwable $exception) {
+                report($exception);
+
+                return response()->json(['status' => 'pending', 'message' => 'We could not confirm the payment with PayPal. Please try again.'], 503);
+            }
+
+            if (PayPal::paidInFull($order, $payment)) {
+                $payment->fill([
+                    'name' => $payment->name ?? (trim(data_get($order, 'payer.name.given_name', '').' '.data_get($order, 'payer.name.surname', '')) ?: null),
+                    'email' => $payment->email ?? data_get($order, 'payer.email_address'),
+                ]);
+                $payment->markCompleted((string) data_get($order, 'purchase_units.0.payments.captures.0.id'), $order);
+            } else {
+                $payment->markFailed('PayPal did not complete the payment ('.(data_get($order, 'purchase_units.0.payments.captures.0.status') ?? data_get($order, 'status', 'unknown')).').', $order);
+            }
+        }
+
+        $payment->refresh();
+
+        return response()->json([
+            'status' => $payment->status->value,
+            'message' => $payment->status === PaymentStatus::Completed
+                ? 'Thank you! Your payment of '.$payment->currency.' '.number_format((float) $payment->amount, 2).' has been received.'
+                : ($payment->failure_reason ?? 'The payment did not go through.'),
+        ]);
+    }
+
+    /**
+     * The customer closed PayPal's pop-up without paying.
+     */
+    public function cancel(string $orderId): JsonResponse
+    {
+        $this->payment($orderId)->markAbandoned('The customer closed PayPal without paying.');
+
+        return response()->json(['status' => 'abandoned']);
+    }
+
+    private function payment(string $orderId): Payment
+    {
+        return Payment::query()->where('gateway', 'paypal')->where('provider_reference', $orderId)->firstOrFail();
+    }
+}
