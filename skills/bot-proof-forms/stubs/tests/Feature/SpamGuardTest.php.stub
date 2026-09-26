@@ -1,0 +1,65 @@
+<?php
+
+use App\Http\Middleware\SpamGuard;
+use App\Support\FormTimeToken;
+use Illuminate\Support\Facades\Blade;
+use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\Route;
+
+beforeEach(function () {
+    $this->submissions = 0;
+    $count = function () {
+        $this->submissions++;
+
+        return response()->json(['message' => 'Saved.']);
+    };
+
+    Route::post('/_guard/contact', $count)->middleware(SpamGuard::class);
+    Route::post('/_guard/pay', $count)->middleware(SpamGuard::class.':reject');
+});
+
+function humanFormToken(int $secondsAgo = 10): string
+{
+    return Crypt::encryptString((string) now()->subSeconds($secondsAgo)->getTimestamp());
+}
+
+test('people who take a few seconds to fill in the form get through', function () {
+    $this->postJson('/_guard/contact', ['form_token' => humanFormToken()])->assertOk()->assertJson(['message' => 'Saved.']);
+
+    expect($this->submissions)->toBe(1);
+});
+
+test('bots get a normal-looking reply but nothing is saved', function (array $input) {
+    $this->postJson('/_guard/contact', $input)->assertOk()->assertJson(['message' => SpamGuard::SILENT_MESSAGE]);
+
+    expect($this->submissions)->toBe(0);
+})->with([
+    'honeypot filled in' => [fn () => ['form_token' => humanFormToken(), 'website' => 'https://spam.example']],
+    'no token' => [['form_token' => '']],
+    'posted instantly' => [fn () => ['form_token' => humanFormToken(0)]],
+    'replayed after a day' => [fn () => ['form_token' => humanFormToken(90_000)]],
+    'forged token' => [['form_token' => 'not-encrypted']],
+]);
+
+test('reject mode refuses suspected bots with a 422', function () {
+    $this->postJson('/_guard/pay', ['form_token' => humanFormToken(0)])->assertUnprocessable();
+
+    expect($this->submissions)->toBe(0);
+});
+
+test('browser forms from bots are sent back with a flash message', function () {
+    $this->from('/contact')->post('/_guard/contact', ['form_token' => ''])
+        ->assertRedirect('/contact')
+        ->assertSessionHas('status', SpamGuard::SILENT_MESSAGE);
+});
+
+test('the Blade component renders a valid token and a hidden honeypot', function () {
+    $html = Blade::render('<x-spam-guard />');
+
+    preg_match('/name="form_token" value="([^"]+)"/', $html, $match);
+
+    $this->travel(5)->seconds();
+
+    expect(FormTimeToken::isValid(html_entity_decode($match[1])))->toBeTrue()
+        ->and($html)->toContain('name="website"')->toContain('aria-hidden="true"')->toContain('tabindex="-1"');
+});

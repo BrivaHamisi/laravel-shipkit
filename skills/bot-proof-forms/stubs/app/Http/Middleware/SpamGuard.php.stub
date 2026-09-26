@@ -1,0 +1,50 @@
+<?php
+
+namespace App\Http\Middleware;
+
+use App\Support\FormTimeToken;
+use Closure;
+use Illuminate\Http\Request;
+use Symfony\Component\HttpFoundation\Response;
+
+/**
+ * Stops bot submissions before they reach the controller: a filled-in honeypot field, or a
+ * form posted faster than a person could type (or replayed from days ago).
+ *
+ *   ->middleware(SpamGuard::class)            Pretend it worked, so bots learn nothing (contact, newsletter).
+ *   ->middleware(SpamGuard::class.':reject')  Refuse with a 422 (payments, sign-ups, anything a person must retry).
+ *
+ * Pair with <x-spam-guard /> inside the form.
+ */
+class SpamGuard
+{
+    public const HONEYPOT = 'website';
+
+    public const TOKEN = 'form_token';
+
+    public const SILENT_MESSAGE = 'Thank you! We have received your message.';
+
+    public function handle(Request $request, Closure $next, string $mode = 'silent'): Response
+    {
+        if (! self::looksLikeABot($request)) {
+            return $next($request);
+        }
+
+        if ($mode === 'reject') {
+            $message = 'Please wait a moment, then try again. If this keeps happening, refresh the page.';
+
+            return $request->expectsJson()
+                ? response()->json(['message' => $message], 422)
+                : back()->withInput()->withErrors([self::TOKEN => $message]);
+        }
+
+        return $request->expectsJson()
+            ? response()->json(['message' => self::SILENT_MESSAGE])
+            : back()->with('status', self::SILENT_MESSAGE);
+    }
+
+    public static function looksLikeABot(Request $request): bool
+    {
+        return $request->filled(self::HONEYPOT) || ! FormTimeToken::isValid($request->string(self::TOKEN)->value());
+    }
+}

@@ -1,0 +1,86 @@
+<?php
+
+namespace App\Providers;
+
+use Illuminate\Cache\RateLimiting\Limit;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\ServiceProvider;
+use Illuminate\Support\Str;
+
+/**
+ * Rate limits that count per person, not per IP address.
+ *
+ * Mobile carriers (Safaricom, MTN, Airtel, Jio...), offices, schools and campus Wi-Fi put
+ * hundreds or thousands of people behind one public IP. A plain "5 per minute per IP" limit
+ * lets one person lock everyone else out. These limiters count per email, phone number or
+ * resource first, and keep a generous per-IP limit only as a backstop against bots.
+ *
+ * Use them as route middleware: ->middleware('throttle:forms').
+ */
+class RateLimitServiceProvider extends ServiceProvider
+{
+    /**
+     * Request fields that identify the person submitting a form, in order of preference.
+     */
+    private const IDENTITY_FIELDS = ['email', 'form_email', 'phone', 'username', 'login'];
+
+    public function boot(): void
+    {
+        // Contact, newsletter, sign-up, password reset: a few tries per person, per form.
+        RateLimiter::for('forms', fn (Request $request): array => array_values(array_filter([
+            ($identity = self::identity($request)) === null
+                ? null
+                : Limit::perMinute(3)->by('forms|'.$request->path().'|'.$identity),
+            Limit::perMinute(30)->by('forms|ip|'.$request->ip()),
+        ])));
+
+        // Anything that sends an SMS, OTP, WhatsApp message or M-Pesa prompt to a phone:
+        // at most three in five minutes per number, so nobody's phone can be spammed.
+        RateLimiter::for('phone-prompts', fn (Request $request): array => [
+            Limit::perMinutes(5, 3)->by('phone|'.(self::phone($request) ?? $request->ip())),
+            Limit::perMinute(30)->by('phone-prompts|ip|'.$request->ip()),
+        ]);
+
+        // Pages that poll a status URL (payments, exports, jobs). The URL contains the
+        // resource's ID, so each resource gets its own allowance.
+        RateLimiter::for('polling', fn (Request $request): array => [
+            Limit::perMinute(30)->by('polling|'.$request->path()),
+            Limit::perMinute(600)->by('polling|ip|'.$request->ip()),
+        ]);
+
+        RateLimiter::for('downloads', fn (Request $request): Limit => Limit::perMinute(120)->by('downloads|'.$request->ip()));
+
+        // Signed-in users are counted by account, guests by IP.
+        RateLimiter::for('api', fn (Request $request): Limit => Limit::perMinute(120)->by(
+            $request->user()?->getAuthIdentifier() !== null ? 'api|user|'.$request->user()->getAuthIdentifier() : 'api|ip|'.$request->ip(),
+        ));
+    }
+
+    /**
+     * Who is submitting: the first identity field present, lower-cased and trimmed.
+     */
+    public static function identity(Request $request): ?string
+    {
+        foreach (self::IDENTITY_FIELDS as $field) {
+            $value = Str::lower(trim((string) $request->input($field)));
+
+            if ($value !== '') {
+                return $field === 'phone' ? (self::phone($request) ?? $value) : $value;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * A phone number reduced to its last nine digits, so 0712 345 678, +254712345678
+     * and 254712345678 all count as the same phone.
+     */
+    public static function phone(Request $request): ?string
+    {
+        $digits = preg_replace('/\D+/', '', (string) $request->input('phone')) ?? '';
+
+        return strlen($digits) >= 9 ? substr($digits, -9) : null;
+    }
+}

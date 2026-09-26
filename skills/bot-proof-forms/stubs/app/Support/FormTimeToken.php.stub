@@ -1,0 +1,39 @@
+<?php
+
+namespace App\Support;
+
+use Illuminate\Contracts\Encryption\DecryptException;
+use Illuminate\Support\Facades\Crypt;
+
+/**
+ * An encrypted "form shown at" timestamp, used to spot automated submissions:
+ * people take a few seconds to fill in a form; bots post instantly or replay old forms.
+ */
+class FormTimeToken
+{
+    public const MIN_SECONDS = 3;
+
+    public const MAX_SECONDS = 86_400;
+
+    public static function issue(): string
+    {
+        return Crypt::encryptString((string) now()->getTimestamp());
+    }
+
+    public static function isValid(?string $token): bool
+    {
+        if (blank($token)) {
+            return false;
+        }
+
+        try {
+            $issuedAt = (int) Crypt::decryptString($token);
+        } catch (DecryptException) {
+            return false;
+        }
+
+        $elapsed = now()->getTimestamp() - $issuedAt;
+
+        return $elapsed >= self::MIN_SECONDS && $elapsed <= self::MAX_SECONDS;
+    }
+}

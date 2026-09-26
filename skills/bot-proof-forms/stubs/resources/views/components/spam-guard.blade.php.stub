@@ -1,0 +1,6 @@
+{{-- Bot trap for <x-spam-guard /> inside any form protected by the SpamGuard middleware.
+     The honeypot is hidden from people and screen readers, so only bots fill it in. --}}
+<input type="hidden" name="{{ \App\Http\Middleware\SpamGuard::TOKEN }}" value="{{ \App\Support\FormTimeToken::issue() }}">
+<div aria-hidden="true" style="position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden">
+    <label>Website <input type="text" name="{{ \App\Http\Middleware\SpamGuard::HONEYPOT }}" tabindex="-1" autocomplete="off"></label>
+</div>

@@ -1,0 +1,16 @@
+{
+    "composer_scripts": {
+        "check:push": [
+            "Composer\\Config::disableProcessTimeout",
+            "npm run build",
+            "@php artisan app:scan-secrets",
+            "@php artisan config:clear --ansi",
+            "pint --test",
+            "@php artisan test"
+        ],
+        "hooks:install": [
+            "@php -r \"is_dir('.git') && passthru('git config core.hooksPath .githooks');\""
+        ]
+    },
+    "executable": [".githooks/pre-push"]
+}

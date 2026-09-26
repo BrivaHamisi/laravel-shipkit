@@ -1,0 +1,30 @@
+<?php
+
+/*
+ * Guards the guard: if someone deletes the hook or the script it calls, pushes silently
+ * stop being checked. These tests fail instead.
+ */
+
+test('the pre-push hook exists, is executable and runs every check', function () {
+    $hook = base_path('.githooks/pre-push');
+
+    expect($hook)->toBeFile()
+        ->and(is_executable($hook))->toBeTrue()
+        ->and(file_get_contents($hook))->toContain('composer check:push');
+});
+
+test('composer check:push builds, scans for secrets, lints and tests', function () {
+    $scripts = json_decode(file_get_contents(base_path('composer.json')), true)['scripts'] ?? [];
+
+    expect($scripts)->toHaveKeys(['check:push', 'hooks:install'])
+        ->and(implode("\n", $scripts['check:push']))
+        ->toContain('npm run build')
+        ->toContain('app:scan-secrets')
+        ->toContain('test');
+});
+
+test('CI runs the same checks as the hook', function () {
+    $workflows = collect(glob(base_path('.github/workflows/*.yml')))->map(fn (string $file) => file_get_contents($file))->implode("\n");
+
+    expect($workflows)->toContain('composer check:push');
+});

@@ -1,0 +1,65 @@
+<?php
+
+use Illuminate\Support\Facades\Route;
+
+beforeEach(function () {
+    Route::post('/_limits/subscribe', fn () => 'ok')->middleware('throttle:forms');
+    Route::post('/_limits/contact', fn () => 'ok')->middleware('throttle:forms');
+    Route::post('/_limits/otp', fn () => 'ok')->middleware('throttle:phone-prompts');
+    Route::get('/_limits/payments/{reference}', fn () => 'ok')->middleware('throttle:polling');
+});
+
+test('many people on one network can all submit a form', function () {
+    foreach (range(1, 20) as $person) {
+        $this->post('/_limits/subscribe', ['email' => "person{$person}@example.org"])->assertOk();
+    }
+});
+
+test('one person is limited to three tries a minute per form', function () {
+    foreach (range(1, 3) as $attempt) {
+        $this->post('/_limits/subscribe', ['email' => 'Same@Example.org '])->assertOk();
+    }
+
+    $this->post('/_limits/subscribe', ['email' => 'same@example.org'])->assertTooManyRequests();
+    $this->post('/_limits/contact', ['email' => 'same@example.org'])->assertOk();
+
+    $this->travel(61)->seconds();
+    $this->post('/_limits/subscribe', ['email' => 'same@example.org'])->assertOk();
+});
+
+test('the per-IP backstop still stops a bot cycling through addresses', function () {
+    foreach (range(1, 30) as $attempt) {
+        $this->post('/_limits/subscribe', ['email' => "bot{$attempt}@example.org"])->assertOk();
+    }
+
+    $this->post('/_limits/subscribe', ['email' => 'bot31@example.org'])->assertTooManyRequests();
+});
+
+test('a phone gets at most three prompts in five minutes, however the number is written', function () {
+    $this->post('/_limits/otp', ['phone' => '0712 345 678'])->assertOk();
+    $this->post('/_limits/otp', ['phone' => '+254712345678'])->assertOk();
+    $this->post('/_limits/otp', ['phone' => '254712345678'])->assertOk();
+
+    $this->post('/_limits/otp', ['phone' => '0712345678'])->assertTooManyRequests();
+    $this->post('/_limits/otp', ['phone' => '0722000111'])->assertOk();
+
+    $this->travel(5)->minutes();
+    $this->post('/_limits/otp', ['phone' => '0712345678'])->assertOk();
+});
+
+test('several people polling their own payments from one network are not blocked', function () {
+    // Five customers, each page checking every four seconds: 75 requests a minute from one IP.
+    foreach (range(1, 15) as $check) {
+        foreach (range(1, 5) as $customer) {
+            $this->get("/_limits/payments/ref-{$customer}")->assertOk();
+        }
+    }
+});
+
+test('one status URL polled too fast is limited', function () {
+    foreach (range(1, 30) as $check) {
+        $this->get('/_limits/payments/ref-1')->assertOk();
+    }
+
+    $this->get('/_limits/payments/ref-1')->assertTooManyRequests();
+});
